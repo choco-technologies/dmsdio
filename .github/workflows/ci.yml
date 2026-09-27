@@ -26,9 +26,31 @@ jobs:
           # dmsdio links against dmsdio_port_if (headers only),
           # not dmsdio_port itself, so building only these two targets
           # never touches src/port/*/port.c - safe to build natively here
-          # regardless of which CPU family the port defaults to.
+          # regardless of which CPU family the port defaults to. Leave
+          # DMOD_CPU_FAMILY at its default (stm32f7): dmod_link_modules'
+          # header fetch for dmgpio keys off of it too, and dmgpio has never
+          # published an x86_64 package - only stm32f4/stm32f7, which is
+          # also all its release pipeline ever builds. Overriding it to
+          # x86_64 here 404s that fetch, since dmgpio's headers don't come
+          # from a family-independent package (see dmspi's own CI for the
+          # same reasoning - dmsdio has the identical dmgpio dependency for
+          # its optional card-detect friend).
           cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64
-          cmake --build . --target dmsdio test_dmsdio
+          cmake --build . --target dmsdio test_dmsdio dmod_generate_manifest
+
+      - name: Build x86_64 dmsdio_port mock
+        run: |
+          # Separate build dir/configure so DMOD_CPU_FAMILY=x86_64 here can't
+          # affect the dmgpio header fetch above. dmsdio_port itself has no
+          # x86_64 release (it's real SDMMC register access) - this builds
+          # src/port/x86_64/port.c, the mocked SD card dmsdio_test.c drives
+          # through mock_control.h, purely so dmod_loader has something to
+          # satisfy dmsdio's runtime dmsdio_port dependency with below.
+          mkdir -p build_dmsdio_port_x86_64
+          cd build_dmsdio_port_x86_64
+          cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64 -DDMOD_CPU_FAMILY=x86_64
+          cmake --build . --target dmsdio_port
+          cp dmf/dmsdio_port.dmf dmf/dmsdio_port.dmd ../build/dmf/
 
       - name: Verify module files
         run: |
@@ -37,11 +59,36 @@ jobs:
           test -f build/dmf/dmsdio.dmf
           test -f build/dmf/dmsdio_version.txt
           test -f build/dmf/test_dmsdio.dmf
+          test -f build/dmf/dmsdio_port.dmf
           echo "Module files present"
 
       - name: Run tests with dmod_loader
         run: |
           export DMOD_DMF_DIR=$(pwd)/build/dmf
+          # dmod_link_modules only fetches headers at configure time;
+          # dmsdio's own runtime dependencies (dmini, dmgpio) still need to
+          # be staged into build/dmf before dmod_loader can resolve them,
+          # same as the ctest target defined in tests/CMakeLists.txt already
+          # does. dmsdio.dmd also lists dmsdio_port, which has no published
+          # x86_64 release (only the real stm32f4/stm32f7 hardware ports
+          # are) - the build step above already placed our own x86_64
+          # dmsdio_port.dmf (the mock) in build/dmf, so `|| true` just lets
+          # dmf-get's redundant remote lookup for it fail without masking a
+          # real failure to fetch dmini/dmgpio/dmosi.
+          dmf-get install -d build/dmf/dmsdio.dmd -y || true
+          dmf-get install -d build/dmf/test_dmsdio.dmd -y
+          # test_dmsdio.dmf only ever looks "dmsdio" up by name at runtime
+          # (Dmod_GetModuleContext("dmsdio") - see dmsdio_test.c, the same
+          # DIF-consumer pattern dmdevfs.c uses for every driver it mounts),
+          # so nothing in its compiled binary references dmsdio's own
+          # signature the way it does dmsdio_port's/dmini's Module API
+          # calls - neither dmsdio.dmd nor test_dmsdio.dmd's dependency
+          # scan (both installed above) can see a DIF-by-name lookup like
+          # that, so "dmsdio" never gets fetched as anyone's dependency.
+          # It's already built as its own target above, though - install
+          # it explicitly by name from that same local build/package tree
+          # (see tests/CMakeLists.txt's ctest wiring for the identical fix).
+          dmf-get install dmsdio -m build/packages/manifest-local.dmm -y
           dmod_loader build/dmf/test_dmsdio.dmf
 
   discover-cpu-families:

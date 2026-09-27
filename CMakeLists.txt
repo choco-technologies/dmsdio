@@ -76,9 +76,12 @@ target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
 )
 
 # To depend on another module's headers, use:
-#   dmod_link_modules(${DMOD_MODULE_NAME}
-#       other_module@1.0
-#   )
+dmod_link_modules(${DMOD_MODULE_NAME}
+    dmdrvi
+    dmini
+    dmgpio
+    dmosi
+)
 
 add_subdirectory(src/port)
 target_link_libraries(${DMOD_MODULE_NAME} ${DMOD_MODULE_NAME}_port_if)

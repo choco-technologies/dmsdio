@@ -28,9 +28,10 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
 )
 
 # To depend on another module's headers, use:
-#   dmod_link_modules(${DMOD_MODULE_NAME}
-#       other_module@1.0
-#   )
+dmod_link_modules(${DMOD_MODULE_NAME}
+    dmclk_port
+    dmosi
+)
 
 target_include_directories(${DMOD_MODULE_NAME} BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/include
