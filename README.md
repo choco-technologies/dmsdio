@@ -55,15 +55,16 @@ uses the driver the way dmdevfs does - through the dmdrvi DIF - and
 implements the dmdrvi MAL to observe hot-plug notifications.
 
 ```bash
-# core module and test (DMOD_CPU_FAMILY stays stm32f7 for the dmgpio headers)
+# core module and test: built for the host, but DMOD_CPU_FAMILY stays at its
+# default (stm32f7) because dmgpio only publishes stm32 headers
 mkdir -p build && cd build
-cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64
+cmake .. -DDMOD_TOOLS_NAME=arch/x86_64
 cmake --build . --target dmsdio test_dmsdio
 cd ..
 
 # simulated card port
 mkdir -p build_port_x86_64 && cd build_port_x86_64
-cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64 -DDMOD_CPU_FAMILY=x86_64
+cmake .. -DDMOD_CPU_FAMILY=x86_64
 cmake --build . --target dmsdio_port
 cp dmf/dmsdio_port.dmf dmf/dmsdio_port.dmd ../build/dmf/
 cd ..

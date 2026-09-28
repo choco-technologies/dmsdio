@@ -23,23 +23,24 @@ jobs:
         run: |
           mkdir -p build
           cd build
-          # dmsdio links against dmsdio_port_if (headers only), so building
-          # these targets never touches src/port/*/port.c. DMOD_CPU_FAMILY
-          # stays at its default (stm32f7) here on purpose: dmsdio uses
-          # dmgpio's types for its card-detect friend and dmgpio only
-          # publishes stm32 packages, so an x86_64 header fetch would 404.
-          cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64
+          # The core module and its test run natively here, but DMOD_CPU_FAMILY
+          # has to stay at its default (stm32f7): dmsdio needs dmgpio's
+          # headers (card-detect friend) and dmgpio only publishes stm32
+          # packages, so a DMOD_CPU_FAMILY=x86_64 header fetch would 404.
+          # That is the only reason DMOD_TOOLS_NAME is overridden by hand -
+          # everywhere else the tools follow from DMOD_CPU_FAMILY.
+          cmake .. -DDMOD_TOOLS_NAME=arch/x86_64
           cmake --build . --target dmsdio test_dmsdio
 
       - name: Build simulated-card dmsdio_port (x86_64)
         run: |
           # src/port/x86_64 is not a hardware port: it simulates an SD card
           # at the command level so the whole protocol in dmsdio can run on
-          # this runner. Separate build dir so DMOD_CPU_FAMILY=x86_64 cannot
-          # affect the dmgpio header fetch above.
+          # this runner. DMOD_CPU_FAMILY=x86_64 alone selects the host tools
+          # (src/port/x86_64/config.cmake).
           mkdir -p build_port_x86_64
           cd build_port_x86_64
-          cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64 -DDMOD_CPU_FAMILY=x86_64
+          cmake .. -DDMOD_CPU_FAMILY=x86_64
           cmake --build . --target dmsdio_port
           cp dmf/dmsdio_port.dmf dmf/dmsdio_port.dmd ../build/dmf/
 
