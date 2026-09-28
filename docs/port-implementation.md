@@ -47,7 +47,8 @@ and recovery policy.
 
 `dmsdio_data_t` describes `block_count` blocks of `block_size` bytes (512
 for card data, 8 for SCR, 64 for SD Status / switch status). Buffers passed
-for 512-byte transfers are `DMSDIO_TRANSFER_ALIGNMENT` (4) byte aligned;
+for 512-byte transfers are `DMSDIO_TRANSFER_ALIGNMENT` (32) byte aligned - one
+Cortex-M7 cache line;
 the core bounces misaligned caller buffers itself. The internal scratch
 block is 32-byte aligned so a port can do cache maintenance on it.
 
@@ -83,6 +84,7 @@ offsets and bit positions for everything the port uses. The shared code in
 * `stm32_sdio_instances[]` - base address, `RCC_APB2ENR`/`RCC_APB2RSTR` bit, NVIC IRQ and DMA controller/streams/channel per instance,
 * `stm32_sdio_family_error_flags` - `STBITERR` on F4 (the bit is reserved on F7),
 * `stm32_sdio_family_dma_reachable()` - memory DMA2 cannot access (F4 CCM),
+* `stm32_sdio_family_has_dcache` - whether cache maintenance applies (F7),
 * `dmod_init`/`dmod_deinit` and the `DMOD_IRQ_HANDLER`s.
 
 Implementation notes:
@@ -103,10 +105,14 @@ Implementation notes:
   DMA stream and the DPSM are armed before the command; for writes the DMA
   stream is started before the command and the DPSM only after a valid
   response. A transfer completes when both `DATAEND` and the DMA completion
-  have been seen. DMA buffers must be 16-byte aligned
-  (`DMSDIO_TRANSFER_ALIGNMENT`, the core bounces other buffers) and
-  reachable by DMA2 (not F4 CCM RAM). The D-cache is not enabled by
-  dmod-boot, so no cache maintenance is done.
+  have been seen. DMA buffers must start on and span whole 32-byte lines
+  (`DMSDIO_TRANSFER_ALIGNMENT`, the core bounces other buffers) and be
+  reachable by DMA2 (not F4 CCM RAM).
+* D-cache (Cortex-M7): whenever `SCB->CCR.DC` is set, the DMA buffer is
+  cleaned before a write, cleaned+invalidated before a read and invalidated
+  again after it (by address, `DCCMVAC`/`DCCIMVAC`/`DCIMVAC`). With the cache
+  disabled, and always on F4 (`stm32_sdio_family_has_dcache = false`), this
+  is a no-op - enabling the cache later needs no driver change.
 * Reads that fit the 32-word FIFO (SCR, SD Status, CMD6 switch status) do
   not use DMA: the FIFO holds the whole transfer and is read at `DATAEND`.
 * The DMA2 controller has to be configured through dmdma before dmsdio is

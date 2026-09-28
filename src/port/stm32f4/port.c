@@ -21,6 +21,9 @@ const uint8_t stm32_sdio_instance_count = sizeof(stm32_sdio_instances) / sizeof(
 /* STBITERR (start bit not detected on all data lines in wide bus mode) exists on F4 only. */
 const uint32_t stm32_sdio_family_error_flags = STM32_SDIO_STA_STBITERR;
 
+/* Cortex-M4: no data cache, nothing to maintain around DMA. */
+const bool stm32_sdio_family_has_dcache = false;
+
 /* The DMA controllers cannot access the 64 KB CCM data RAM (RM0090 2.3.1). */
 #define STM32F4_CCM_START   0x10000000UL
 #define STM32F4_CCM_END     0x10010000UL

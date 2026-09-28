@@ -19,11 +19,13 @@
 #define DMSDIO_BLOCK_SIZE           512u
 
 /**
- * Buffer alignment for direct (zero-copy) port data transfers. 16 bytes lets
- * STM32 ports move data with 4-word DMA bursts that never cross a 1 KB
- * boundary; misaligned caller buffers are bounced through an aligned block.
+ * Buffer alignment for direct (zero-copy) port data transfers: one 32-byte
+ * data cache line (Cortex-M7), so a port can clean/invalidate a DMA buffer
+ * without touching neighbouring data, and 4-word DMA bursts never cross a
+ * 1 KB boundary. Misaligned caller buffers are bounced through an aligned
+ * block.
  */
-#define DMSDIO_TRANSFER_ALIGNMENT   16u
+#define DMSDIO_TRANSFER_ALIGNMENT   32u
 
 /** SD host controller instance (1-based, e.g. 1 = SDMMC1/SDIO). */
 typedef uint8_t dmsdio_instance_t;

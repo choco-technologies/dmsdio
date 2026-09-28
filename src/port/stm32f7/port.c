@@ -28,6 +28,10 @@ const uint8_t stm32_sdio_instance_count = sizeof(stm32_sdio_instances) / sizeof(
 /* SDMMC has no STBITERR (STA bit 9 is reserved on F7). */
 const uint32_t stm32_sdio_family_error_flags = 0U;
 
+/* Cortex-M7: 32-byte-line D-cache. Maintenance is done whenever it is
+ * enabled (SCB->CCR.DC), see stm32_data.c. */
+const bool stm32_sdio_family_has_dcache = true;
+
 /* DMA2 reaches SRAM1/2, DTCM (through the AHBS port) and external memory -
  * only ITCM RAM (0x00000000-0x00003FFF) is out of reach, and no data buffer
  * lives there. */

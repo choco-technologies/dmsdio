@@ -20,6 +20,13 @@
  * not use DMA: the whole transfer is buffered by the FIFO and read out at
  * DATAEND.
  *
+ * D-cache (Cortex-M7): whenever SCB->CCR.DC is set, DMA buffers are cleaned
+ * before a write, cleaned+invalidated before a read (so no dirty line can be
+ * evicted over the incoming data) and invalidated again after it (lines the
+ * CPU speculatively refilled meanwhile). DMA buffers are therefore required
+ * to start on and span whole 32-byte cache lines; with the cache disabled
+ * (or on Cortex-M4) nothing is done.
+ *
  * Ordering: for reads the DMA stream and the DPSM are enabled before the
  * command is sent; for writes the DMA stream is started before the command
  * (it only fills the FIFO) and the DPSM is enabled after a valid response,
@@ -32,6 +39,52 @@
 
 #define DMA_TERMINAL_EVENTS         (dmdma_event_complete | dmdma_event_error | \
                                      dmdma_event_timeout | dmdma_event_aborted)
+
+/* ---- Cortex-M7 data cache maintenance by address (ARMv7-M SCB) ---- */
+
+#define SCB_CCR             (*(volatile uint32_t *)0xE000ED14UL)
+#define SCB_CCR_DC          (1UL << 16)
+#define SCB_DCIMVAC         (*(volatile uint32_t *)0xE000EF5CUL)   /* invalidate */
+#define SCB_DCCMVAC         (*(volatile uint32_t *)0xE000EF68UL)   /* clean */
+#define SCB_DCCIMVAC        (*(volatile uint32_t *)0xE000EF70UL)   /* clean + invalidate */
+#define DCACHE_LINE         32U
+
+static bool dcache_enabled(void)
+{
+    return stm32_sdio_family_has_dcache && (SCB_CCR & SCB_CCR_DC) != 0U;
+}
+
+static void dcache_by_address(volatile uint32_t* operation, const void* buffer, uint32_t length)
+{
+    if (!dcache_enabled() || length == 0U)
+    {
+        return;
+    }
+    uintptr_t line = (uintptr_t)buffer & ~(uintptr_t)(DCACHE_LINE - 1U);
+    uintptr_t end  = (uintptr_t)buffer + length;
+    __asm__ volatile ("dsb" ::: "memory");
+    for (; line < end; line += DCACHE_LINE)
+    {
+        *operation = (uint32_t)line;
+    }
+    __asm__ volatile ("dsb\n\tisb" ::: "memory");
+}
+
+/* Before the DMA starts: writes need the data in RAM, reads must not have
+ * dirty lines that could later be evicted over what the DMA wrote. */
+static void dcache_before_dma(stm32_sdio_state_t* st)
+{
+    dcache_by_address(st->data_read ? &SCB_DCCIMVAC : &SCB_DCCMVAC, st->dma_buffer, st->dma_length);
+}
+
+/* After a read: drop lines the CPU may have speculatively refilled. */
+static void dcache_after_dma(stm32_sdio_state_t* st)
+{
+    if (st->data_read)
+    {
+        dcache_by_address(&SCB_DCIMVAC, st->dma_buffer, st->dma_length);
+    }
+}
 
 /* dmdma lease callback - interrupt context (or synchronous from _abort). */
 static void dma_callback(dmdma_lease_t lease, dmdma_event_t event, void* user_ptr)
@@ -127,6 +180,9 @@ static int start_dma(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st,
         .source_burst      = dmdma_burst_4,
         .destination_burst = dmdma_burst_4,
     };
+    st->dma_buffer = data->buffer;
+    st->dma_length = length;
+    dcache_before_dma(st);
     st->dma_busy = true;
     int rc = dmdma_lease_start_ex(st->dma, &cfg, &options);
     if (rc != 0)
@@ -137,9 +193,11 @@ static int start_dma(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st,
     return rc;
 }
 
+/* Whole cache lines only, so maintenance never touches neighbouring data. */
 static bool dma_capable(const dmsdio_data_t* data, uint32_t length)
 {
     return ((uintptr_t)data->buffer % STM32_SDIO_DMA_ALIGNMENT) == 0 &&
+           (length % STM32_SDIO_DMA_ALIGNMENT) == 0 &&
            stm32_sdio_family_dma_reachable(data->buffer, length);
 }
 
@@ -206,6 +264,7 @@ static dmsdio_status_t finish_dma(stm32_sdio_state_t* st)
         DMOD_LOG_ERROR("dmsdio_port: DMA did not complete after DATAEND\n");
         return dmsdio_status_overrun;
     }
+    dcache_after_dma(st);
     return (st->dma_event & (dmdma_event_error | dmdma_event_timeout)) ? dmsdio_status_overrun
                                                                         : dmsdio_status_ok;
 }

@@ -92,7 +92,9 @@ typedef struct
 
 #define STM32_SDIO_FIFO_WORDS           32U
 #define STM32_SDIO_FIFO_BYTES           (STM32_SDIO_FIFO_WORDS * 4U)
-#define STM32_SDIO_DMA_ALIGNMENT        16U     /* one INC4 word burst, never crosses 1 KB */
+/* DMA buffers: a 32-byte D-cache line (Cortex-M7) - which also keeps every
+ * 16-byte INC4 word burst inside a 1 KB boundary. */
+#define STM32_SDIO_DMA_ALIGNMENT        32U
 #define STM32_SDIO_MAX_DATA_LENGTH      0x01FFFFFFU
 #define STM32_SDIO_MAX_INSTANCES        2U
 
@@ -124,6 +126,9 @@ extern const uint32_t stm32_sdio_family_error_flags;
 /** Whether DMA2 can reach [address, address + length) - e.g. not F4 CCM RAM. Defined in <family>/port.c. */
 bool stm32_sdio_family_dma_reachable(const void* address, size_t length);
 
+/** Whether the core has a data cache (Cortex-M7: true, Cortex-M4: false). Defined in <family>/port.c. */
+extern const bool stm32_sdio_family_has_dcache;
+
 /**
  * @brief Per-instance runtime state (shared by stm32_common.c and stm32_data.c).
  */
@@ -142,6 +147,8 @@ typedef struct
     bool                data_read;
     bool                data_dma;       /* data phase uses DMA (else: FIFO read at DATAEND) */
     uint32_t            dctrl;          /* DCTRL value of the armed data phase */
+    void*               dma_buffer;     /* buffer of the running DMA transfer */
+    uint32_t            dma_length;     /* its length in bytes */
     uint32_t*           cursor;         /* FIFO-only reads: destination */
     uint32_t            words_left;
 } stm32_sdio_state_t;

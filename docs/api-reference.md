@@ -30,7 +30,7 @@ dmdrvi_ssize_t dmdrvi_write(ctx, handle, const void* buf, size_t size, dmdrvi_of
 ```
 
 * `offset` is a 64-bit byte offset; any offset and length are accepted.
-  Whole, 4-byte aligned blocks are transferred directly between the caller's
+  Whole blocks in a 32-byte aligned buffer are transferred directly between the caller's
   buffer and the card (CMD17/CMD18, CMD24/CMD25 + CMD12, split into at most
   `max_blocks_per_transfer` blocks per command). A partial block at either
   end of the range - or a misaligned buffer - goes through a one-block
