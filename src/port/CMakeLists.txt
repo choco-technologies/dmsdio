@@ -44,11 +44,12 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     ${FAMILY_SOURCES}
 )
 
+# dmdma 0.4: dmdma_lease_start_ex() (FIFO/burst/flow-controller options)
 if(DMOD_CPU_FAMILY MATCHES "^stm32")
     dmod_link_modules(${DMOD_MODULE_NAME}
         dmclk_port
         dmosi
-        dmdma
+        dmdma@>=0.4
     )
 endif()
 
