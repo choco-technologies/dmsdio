@@ -74,6 +74,9 @@ typedef struct
 #define STM32_SDIO_STA_CMDACT           (1U << 11)
 #define STM32_SDIO_STA_TXFIFOHE         (1U << 14)
 #define STM32_SDIO_STA_RXFIFOHF         (1U << 15)
+#define STM32_SDIO_STA_TXFIFOF          (1U << 16)
+#define STM32_SDIO_STA_RXFIFOF          (1U << 17)
+#define STM32_SDIO_STA_TXFIFOE          (1U << 18)
 #define STM32_SDIO_STA_RXDAVL           (1U << 21)
 
 #define STM32_SDIO_CMD_FLAGS    (STM32_SDIO_STA_CCRCFAIL | STM32_SDIO_STA_CTIMEOUT | \

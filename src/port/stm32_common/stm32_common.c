@@ -316,27 +316,56 @@ dmod_dmsdio_port_api_declaration(1.0, int, _set_bus_width, ( dmsdio_instance_t i
  *  Interrupt handler
  * ====================================================================== */
 
+/*
+ * Move as many words as the FIFO allows in one interrupt: a full RX FIFO
+ * (or an empty TX FIFO) is serviced as 32 words, a half-full/half-empty one
+ * as 8, and the status is re-sampled until neither applies. This keeps the
+ * number of interrupts - whose entry/dispatch cost is what limits PIO
+ * throughput - as low as possible.
+ */
+static uint32_t rx_burst(uint32_t sta)
+{
+    if (sta & STM32_SDIO_STA_RXFIFOF)
+    {
+        return STM32_SDIO_FIFO_WORDS;
+    }
+    return (sta & STM32_SDIO_STA_RXFIFOHF) ? STM32_SDIO_FIFO_HALF_WORDS : 0U;
+}
+
+static uint32_t tx_burst(uint32_t sta)
+{
+    if (sta & STM32_SDIO_STA_TXFIFOE)
+    {
+        return STM32_SDIO_FIFO_WORDS;
+    }
+    return (sta & STM32_SDIO_STA_TXFIFOHE) ? STM32_SDIO_FIFO_HALF_WORDS : 0U;
+}
+
 static void service_fifo(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, uint32_t sta)
 {
-    if (st->data_read && (sta & STM32_SDIO_STA_RXFIFOHF))
+    uint32_t* cursor = st->cursor;
+    uint32_t left = st->words_left;
+    uint32_t burst = st->data_read ? rx_burst(sta) : tx_burst(sta);
+    while (burst != 0U && left != 0U)
     {
-        for (uint32_t i = 0; i < STM32_SDIO_FIFO_HALF_WORDS && st->words_left > 0; i++)
+        uint32_t n = (burst < left) ? burst : left;
+        left -= n;
+        if (st->data_read)
         {
-            *st->cursor++ = regs->FIFO;
-            st->words_left--;
+            for (; n != 0U; n--) { *cursor++ = regs->FIFO; }
         }
+        else
+        {
+            for (; n != 0U; n--) { regs->FIFO = *cursor++; }
+        }
+        sta = regs->STA;
+        burst = st->data_read ? rx_burst(sta) : tx_burst(sta);
     }
-    else if (!st->data_read && (sta & STM32_SDIO_STA_TXFIFOHE))
+    st->cursor = cursor;
+    st->words_left = left;
+    if (!st->data_read && left == 0U)
     {
-        for (uint32_t i = 0; i < STM32_SDIO_FIFO_HALF_WORDS && st->words_left > 0; i++)
-        {
-            regs->FIFO = *st->cursor++;
-            st->words_left--;
-        }
-        if (st->words_left == 0)
-        {
-            regs->MASK &= ~STM32_SDIO_STA_TXFIFOHE;
-        }
+        regs->MASK &= ~STM32_SDIO_STA_TXFIFOHE;
     }
 }
 

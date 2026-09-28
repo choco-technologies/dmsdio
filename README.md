@@ -117,7 +117,7 @@ This module ships two DMOD modules: the architecture-independent
 `dmsdio` (all SD protocol logic) and `dmsdio_port`, which contains the
 protocol-free host controller primitives. The active architecture is
 selected via `DMOD_CPU_FAMILY` (default: `stm32f7`): `stm32f4` (SDIO) and
-`stm32f7` (SDMMC1/2) share their implementation in `src/port/stm32_common`;
+`stm32f7` (SDMMC1) share their implementation in `src/port/stm32_common`;
 `x86_64` is the simulated card used by the tests. Board configurations for
 STM32F746G-DISCO and STM32F407G-DISC1 are in [configs/](configs/README.md).
 

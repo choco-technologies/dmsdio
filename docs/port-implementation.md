@@ -69,7 +69,7 @@ block is 32-byte aligned so a port can do cache maintenance on it.
 | Family | Status |
 |--------|--------|
 | `stm32f4` | SDIO (RM0090 section 31), one instance. Thin wrapper over `stm32_common` |
-| `stm32f7` | SDMMC1 and SDMMC2 (SDMMC2 on F76x/F77x only), RM0385/RM0410 section 35. Thin wrapper over `stm32_common` |
+| `stm32f7` | SDMMC1, RM0385/RM0410 section 35. Thin wrapper over `stm32_common`. SDMMC2 (F76x/F77x only) is not registered: packages are per family and its IRQ 103 does not exist on F74x/F75x |
 | `x86_64` | Simulated SD card for the automated tests (`dmsdio_mock.h`: card types SDSC v1/v2, SDHC, SDXC, fault injection, removal, counters). Never released - CI and the release workflow exclude it from the hardware matrix |
 
 ### STM32 (`src/port/stm32_common`)
@@ -91,9 +91,12 @@ Implementation notes:
   requested maximum is at least the source (High Speed: 48 MHz).
 * Commands complete on `CMDREND`/`CMDSENT`/`CCRCFAIL`/`CTIMEOUT` interrupts.
   `CCRCFAIL` is ignored for R3 (`dmsdio_response_short_no_crc`).
-* Data is moved by the interrupt handler from/to the 32-word FIFO
-  (`RXFIFOHF`/`TXFIFOHE`, 8 words per interrupt) until `DATAEND` or a data
-  error. For reads the DPSM and FIFO interrupts are armed before the command
+* Data is moved by the interrupt handler from/to the 32-word FIFO until
+  `DATAEND` or a data error; each interrupt keeps servicing the FIFO (32 words
+  when full/empty, 8 when half) until neither condition holds. This PIO path
+  is bounded by interrupt latency: on STM32F746G-DISCO it overran (`RXOVERR`)
+  at 24/48 MHz 4-bit with the earlier 8-words-per-interrupt service and only
+  12 MHz 1-bit was verified. Full 4-bit High Speed throughput needs DMA. For reads the DPSM and FIFO interrupts are armed before the command
   is sent; for writes the FIFO is fed only after a valid response. `DTIMER`
   holds the per-block timeout; every wait is additionally bounded in software.
 * DMA is not used: SDIO/SDMMC need a DMA2 stream (stream 3 or 6, channel 4)
