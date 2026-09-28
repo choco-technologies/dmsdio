@@ -3,7 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "dmsdio_port.h"
+#include "dmosi.h"
+#include "dmdma.h"
 
 /**
  * @brief STM32 SDIO (F4, RM0090 section 31) / SDMMC (F7, RM0385 section 35)
@@ -57,6 +60,7 @@ typedef struct
 /* DCTRL */
 #define STM32_SDIO_DCTRL_DTEN           (1U << 0)
 #define STM32_SDIO_DCTRL_DTDIR_READ     (1U << 1)
+#define STM32_SDIO_DCTRL_DMAEN          (1U << 3)
 #define STM32_SDIO_DCTRL_DBLOCKSIZE_Pos 4U
 
 /* STA / ICR / MASK */
@@ -87,7 +91,8 @@ typedef struct
                                  STM32_SDIO_STA_DATAEND | STM32_SDIO_STA_DBCKEND)
 
 #define STM32_SDIO_FIFO_WORDS           32U
-#define STM32_SDIO_FIFO_HALF_WORDS      8U
+#define STM32_SDIO_FIFO_BYTES           (STM32_SDIO_FIFO_WORDS * 4U)
+#define STM32_SDIO_DMA_ALIGNMENT        16U     /* one INC4 word burst, never crosses 1 KB */
 #define STM32_SDIO_MAX_DATA_LENGTH      0x01FFFFFFU
 #define STM32_SDIO_MAX_INSTANCES        2U
 
@@ -101,9 +106,12 @@ typedef struct
  */
 typedef struct
 {
-    uint32_t base;          /**< Peripheral base address */
-    uint32_t apb2_bit;      /**< Bit in RCC_APB2ENR / RCC_APB2RSTR */
-    uint32_t irqn;          /**< NVIC IRQ number */
+    uint32_t    base;           /**< Peripheral base address */
+    uint32_t    apb2_bit;       /**< Bit in RCC_APB2ENR / RCC_APB2RSTR */
+    uint32_t    irqn;           /**< NVIC IRQ number */
+    uint8_t     dma_controller; /**< dmdma controller (1 = DMA2) */
+    uint8_t     dma_streams[2]; /**< Preferred and alternate stream */
+    uint8_t     dma_channel;    /**< DMA request channel (CHSEL) */
 } stm32_sdio_instance_desc_t;
 
 /** Instances of this family, indexed by (instance - 1). Defined in <family>/port.c. */
@@ -112,6 +120,46 @@ extern const uint8_t stm32_sdio_instance_count;
 
 /** Family-only data error flags (STBITERR on F4, 0 on F7). Defined in <family>/port.c. */
 extern const uint32_t stm32_sdio_family_error_flags;
+
+/** Whether DMA2 can reach [address, address + length) - e.g. not F4 CCM RAM. Defined in <family>/port.c. */
+bool stm32_sdio_family_dma_reachable(const void* address, size_t length);
+
+/**
+ * @brief Per-instance runtime state (shared by stm32_common.c and stm32_data.c).
+ */
+typedef struct
+{
+    bool                initialized;
+    dmosi_semaphore_t   done;           /* posted per finished phase (SDIO IRQ, DMA callback) */
+    uint32_t            clock_hz;       /* current SDIO_CK */
+    dmdma_lease_t       dma;            /* leased DMA2 stream */
+    volatile bool       cmd_busy;
+    volatile uint32_t   cmd_status;
+    volatile bool       data_busy;      /* DPSM running (until DATAEND or a data error) */
+    volatile uint32_t   data_status;
+    volatile bool       dma_busy;       /* DMA stream running */
+    volatile uint32_t   dma_event;
+    bool                data_read;
+    bool                data_dma;       /* data phase uses DMA (else: FIFO read at DATAEND) */
+    uint32_t            dctrl;          /* DCTRL value of the armed data phase */
+    uint32_t*           cursor;         /* FIFO-only reads: destination */
+    uint32_t            words_left;
+} stm32_sdio_state_t;
+
+/* --- stm32_common.c helpers used by stm32_data.c --- */
+volatile stm32_sdio_t* stm32_sdio_regs(dmsdio_instance_t instance);
+uint32_t stm32_sdio_data_error_flags(void);
+void     stm32_sdio_mask_enable(volatile stm32_sdio_t* regs, uint32_t bits);
+bool     stm32_sdio_wait(stm32_sdio_state_t* st, volatile bool* busy, uint32_t timeout_ms);
+
+/* --- stm32_data.c: data path (DMA for block data, FIFO for small reads) --- */
+int             stm32_sdio_data_init(const stm32_sdio_instance_desc_t* desc, stm32_sdio_state_t* st);
+void            stm32_sdio_data_deinit(stm32_sdio_state_t* st);
+dmsdio_status_t stm32_sdio_data_arm(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st,
+                                    const stm32_sdio_instance_desc_t* desc, const dmsdio_data_t* data);
+dmsdio_status_t stm32_sdio_data_run(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, const dmsdio_data_t* data);
+void            stm32_sdio_data_irq(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, uint32_t sta);
+void            stm32_sdio_data_abort(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st);
 
 /** Reset the shared per-instance state; called from each family's dmod_init()/dmod_deinit(). */
 void stm32_sdio_common_init(void);

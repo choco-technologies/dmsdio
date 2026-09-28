@@ -21,7 +21,10 @@ set(DMOD_DMR_PATH           ${CMAKE_SOURCE_DIR}/dmsdio_port.dmr)
 # simulated card used by the tests.
 set(FAMILY_SOURCES "")
 if(DMOD_CPU_FAMILY MATCHES "^stm32")
-    set(FAMILY_SOURCES stm32_common/stm32_common.c)
+    set(FAMILY_SOURCES
+        stm32_common/stm32_common.c
+        stm32_common/stm32_data.c
+    )
 elseif(DMOD_CPU_FAMILY STREQUAL "x86_64")
     set(FAMILY_SOURCES
         x86_64/mock_card.c
@@ -45,6 +48,7 @@ if(DMOD_CPU_FAMILY MATCHES "^stm32")
     dmod_link_modules(${DMOD_MODULE_NAME}
         dmclk_port
         dmosi
+        dmdma
     )
 endif()
 

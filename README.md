@@ -133,8 +133,9 @@ another architecture. Port-specific files:
 ├── src/port/
 │   ├── CMakeLists.txt
 │   ├── stm32_common/      # SDIO/SDMMC host shared by F4 and F7
-│   │   ├── stm32_common.c
-│   │   └── stm32_common.h
+│   │   ├── stm32_common.c # lifecycle, clock, commands, IRQ
+│   │   ├── stm32_common.h
+│   │   └── stm32_data.c   # data path: DMA2 lease (dmdma), FIFO for small reads
 │   ├── stm32f4/
 │   │   ├── config.cmake
 │   │   └── port.c

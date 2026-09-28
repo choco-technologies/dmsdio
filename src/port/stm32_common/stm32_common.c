@@ -12,19 +12,12 @@
 /*
  * STM32F4 SDIO / STM32F7 SDMMC host - protocol-free primitives only.
  *
- * Command path: CPSM with CMDREND/CMDSENT/CCRCFAIL/CTIMEOUT interrupts.
- * Data path: DPSM in block mode, FIFO serviced from the interrupt handler
- * (RXFIFOHF / TXFIFOHE, 8 words per interrupt) until DATAEND or a data
- * error. For reads the DPSM and the FIFO interrupts are armed before the
- * command is sent so no block can overrun the 32-word FIFO while the
- * response is being processed; for writes the FIFO is only fed after a
- * valid response, as the card expects.
+ * This file: lifecycle, clocking, bus width, the command path (CPSM with
+ * CMDREND/CMDSENT/CCRCFAIL/CTIMEOUT interrupts) and the shared interrupt
+ * handler. The data path (DMA for block data) lives in stm32_data.c.
  *
- * DMA is not used: SDIO/SDMMC data requests need a DMA stream in FIFO mode
- * with 4-beat bursts and peripheral flow control (RM0090 31.3.2 / RM0385
- * 35.3.2), which the dmdma lease API does not expose yet. Hardware flow
- * control (CLKCR.HWFC_EN) is not used either: ES0182 (STM32F40x/41x errata)
- * documents SDIO_CK glitches with it enabled.
+ * Hardware flow control (CLKCR.HWFC_EN) is not used: ES0182 (STM32F40x/41x
+ * errata) documents SDIO_CK glitches with it enabled.
  *
  * Every wait is bounded: the command wait by STM32_CMD_TIMEOUT_MS on top of
  * the hardware 64-clock response timeout, the data wait by the per-block
@@ -32,21 +25,7 @@
  */
 
 #define STM32_CMD_TIMEOUT_MS        100
-#define STM32_DATA_TIMEOUT_SLACK_MS 50
 
-typedef struct
-{
-    bool                initialized;
-    dmosi_semaphore_t   done;           /* posted by the ISR per finished phase */
-    uint32_t            clock_hz;       /* current SDIO_CK */
-    volatile bool       cmd_busy;
-    volatile uint32_t   cmd_status;
-    volatile bool       data_busy;
-    volatile uint32_t   data_status;
-    volatile bool       data_read;
-    uint32_t* volatile  cursor;         /* next FIFO word in the caller's buffer */
-    volatile uint32_t   words_left;
-} stm32_sdio_state_t;
 
 static stm32_sdio_state_t g_state[STM32_SDIO_MAX_INSTANCES];
 
@@ -63,7 +42,7 @@ static const stm32_sdio_instance_desc_t* get_desc(dmsdio_instance_t instance)
     return &stm32_sdio_instances[instance - 1];
 }
 
-static volatile stm32_sdio_t* get_regs(dmsdio_instance_t instance)
+volatile stm32_sdio_t* stm32_sdio_regs(dmsdio_instance_t instance)
 {
     return (volatile stm32_sdio_t*)stm32_sdio_instances[instance - 1].base;
 }
@@ -77,7 +56,7 @@ static stm32_sdio_state_t* get_ready_state(dmsdio_instance_t instance)
     return &g_state[instance - 1];
 }
 
-static uint32_t data_error_flags(void)
+uint32_t stm32_sdio_data_error_flags(void)
 {
     return STM32_SDIO_DATA_ERRORS | stm32_sdio_family_error_flags;
 }
@@ -109,7 +88,7 @@ static void register_settle(void)
 }
 
 /* MASK is also modified by the ISR - thread-side read-modify-write must not interleave. */
-static void mask_enable(volatile stm32_sdio_t* regs, uint32_t bits)
+void stm32_sdio_mask_enable(volatile stm32_sdio_t* regs, uint32_t bits)
 {
     Dmod_EnterCritical();
     regs->MASK |= bits;
@@ -124,7 +103,7 @@ static void drain_semaphore(stm32_sdio_state_t* st)
 }
 
 /* Wait until the ISR cleared *busy. Returns false on timeout. */
-static bool wait_phase(stm32_sdio_state_t* st, volatile bool* busy, uint32_t timeout_ms)
+bool stm32_sdio_wait(stm32_sdio_state_t* st, volatile bool* busy, uint32_t timeout_ms)
 {
     int32_t timeout = (timeout_ms > (uint32_t)INT32_MAX) ? INT32_MAX : (int32_t)timeout_ms;
     while (*busy)
@@ -184,13 +163,20 @@ dmod_dmsdio_port_api_declaration(1.0, int, _host_init, ( dmsdio_instance_t insta
         return -EIO;
     }
     memset(st, 0, sizeof(*st));
-    st->done = dmosi_semaphore_create(0, 2);
+    st->done = dmosi_semaphore_create(0, 3);
     if (st->done == NULL)
     {
         return -ENOMEM;
     }
+    int ret = stm32_sdio_data_init(desc, st);
+    if (ret != 0)
+    {
+        dmosi_semaphore_destroy(st->done);
+        memset(st, 0, sizeof(*st));
+        return ret;
+    }
     reset_peripheral(desc);
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     regs->MASK  = 0;
     regs->ICR   = static_flags();
     regs->POWER = STM32_SDIO_POWER_OFF;
@@ -208,13 +194,14 @@ dmod_dmsdio_port_api_declaration(1.0, int, _host_deinit, ( dmsdio_instance_t ins
         return -ENODEV;
     }
     const stm32_sdio_instance_desc_t* desc = get_desc(instance);
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     nvic_disable_irq(desc->irqn);
     regs->MASK  = 0;
     regs->DCTRL = 0;
     regs->CLKCR = 0;
     regs->POWER = STM32_SDIO_POWER_OFF;
     STM32_RCC_APB2ENR &= ~(1U << desc->apb2_bit);
+    stm32_sdio_data_deinit(st);
     dmosi_semaphore_destroy(st->done);
     memset(st, 0, sizeof(*st));
     return 0;
@@ -230,7 +217,7 @@ dmod_dmsdio_port_api_declaration(1.0, int, _set_power, ( dmsdio_instance_t insta
     {
         return -ENODEV;
     }
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     if (on)
     {
         regs->POWER = STM32_SDIO_POWER_ON;
@@ -283,7 +270,7 @@ dmod_dmsdio_port_api_declaration(1.0, int, _set_clock, ( dmsdio_instance_t insta
         DMOD_LOG_ERROR("dmsdio_port: cannot derive %u Hz from %u Hz\n", (unsigned)max_hz, (unsigned)source);
         return ret;
     }
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     uint32_t clkcr = regs->CLKCR & ~(STM32_SDIO_CLKCR_CLKDIV_Msk | STM32_SDIO_CLKCR_BYPASS);
     regs->CLKCR = clkcr | bits;
     register_settle();
@@ -305,7 +292,7 @@ dmod_dmsdio_port_api_declaration(1.0, int, _set_bus_width, ( dmsdio_instance_t i
     {
         return -EINVAL;
     }
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     uint32_t clkcr = regs->CLKCR & ~STM32_SDIO_CLKCR_WIDBUS_Msk;
     regs->CLKCR = clkcr | ((width == dmsdio_bus_width_4bit) ? STM32_SDIO_CLKCR_WIDBUS_4BIT : 0U);
     register_settle();
@@ -316,74 +303,6 @@ dmod_dmsdio_port_api_declaration(1.0, int, _set_bus_width, ( dmsdio_instance_t i
  *  Interrupt handler
  * ====================================================================== */
 
-/*
- * Move as many words as the FIFO allows in one interrupt: a full RX FIFO
- * (or an empty TX FIFO) is serviced as 32 words, a half-full/half-empty one
- * as 8, and the status is re-sampled until neither applies. This keeps the
- * number of interrupts - whose entry/dispatch cost is what limits PIO
- * throughput - as low as possible.
- */
-static uint32_t rx_burst(uint32_t sta)
-{
-    if (sta & STM32_SDIO_STA_RXFIFOF)
-    {
-        return STM32_SDIO_FIFO_WORDS;
-    }
-    return (sta & STM32_SDIO_STA_RXFIFOHF) ? STM32_SDIO_FIFO_HALF_WORDS : 0U;
-}
-
-static uint32_t tx_burst(uint32_t sta)
-{
-    if (sta & STM32_SDIO_STA_TXFIFOE)
-    {
-        return STM32_SDIO_FIFO_WORDS;
-    }
-    return (sta & STM32_SDIO_STA_TXFIFOHE) ? STM32_SDIO_FIFO_HALF_WORDS : 0U;
-}
-
-static void service_fifo(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, uint32_t sta)
-{
-    uint32_t* cursor = st->cursor;
-    uint32_t left = st->words_left;
-    uint32_t burst = st->data_read ? rx_burst(sta) : tx_burst(sta);
-    while (burst != 0U && left != 0U)
-    {
-        uint32_t n = (burst < left) ? burst : left;
-        left -= n;
-        if (st->data_read)
-        {
-            for (; n != 0U; n--) { *cursor++ = regs->FIFO; }
-        }
-        else
-        {
-            for (; n != 0U; n--) { regs->FIFO = *cursor++; }
-        }
-        sta = regs->STA;
-        burst = st->data_read ? rx_burst(sta) : tx_burst(sta);
-    }
-    st->cursor = cursor;
-    st->words_left = left;
-    if (!st->data_read && left == 0U)
-    {
-        regs->MASK &= ~STM32_SDIO_STA_TXFIFOHE;
-    }
-}
-
-static void finish_data(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, uint32_t sta)
-{
-    while (st->data_read && st->words_left > 0 && (regs->STA & STM32_SDIO_STA_RXDAVL))
-    {
-        *st->cursor++ = regs->FIFO;
-        st->words_left--;
-    }
-    regs->MASK &= ~(STM32_SDIO_STA_RXFIFOHF | STM32_SDIO_STA_TXFIFOHE |
-                    STM32_SDIO_STA_DATAEND | data_error_flags());
-    regs->ICR = STM32_SDIO_STA_DATAEND | STM32_SDIO_STA_DBCKEND | data_error_flags();
-    st->data_status = sta;
-    st->data_busy = false;
-    dmosi_semaphore_post(st->done, 1);
-}
-
 void stm32_sdio_irq_handler(dmsdio_instance_t instance)
 {
     stm32_sdio_state_t* st = get_ready_state(instance);
@@ -391,7 +310,7 @@ void stm32_sdio_irq_handler(dmsdio_instance_t instance)
     {
         return;
     }
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     uint32_t sta = regs->STA;
 
     if (st->cmd_busy && (sta & STM32_SDIO_CMD_FLAGS))
@@ -402,57 +321,12 @@ void stm32_sdio_irq_handler(dmsdio_instance_t instance)
         st->cmd_busy = false;
         dmosi_semaphore_post(st->done, 1);
     }
-    if (st->data_busy)
-    {
-        service_fifo(regs, st, sta);
-        if (sta & (STM32_SDIO_STA_DATAEND | data_error_flags()))
-        {
-            finish_data(regs, st, sta);
-        }
-    }
+    stm32_sdio_data_irq(regs, st, sta);
 }
 
 /* ======================================================================
  *  Transport
  * ====================================================================== */
-
-static uint32_t block_size_code(uint32_t block_size)
-{
-    uint32_t code = 0;
-    while ((1U << code) < block_size && code < 14U)
-    {
-        code++;
-    }
-    return ((1U << code) == block_size) ? code : UINT32_MAX;
-}
-
-/* Program DTIMER/DLEN/DCTRL. For reads the DPSM and FIFO interrupts start now. */
-static dmsdio_status_t arm_data(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, const dmsdio_data_t* data)
-{
-    uint32_t code = block_size_code(data->block_size);
-    uint64_t length = (uint64_t)data->block_size * data->block_count;
-    if (data->buffer == NULL || data->block_count == 0 || code == UINT32_MAX ||
-        length > STM32_SDIO_MAX_DATA_LENGTH || ((uintptr_t)data->buffer % 4U) != 0 ||
-        (data->block_size % 4U) != 0)
-    {
-        return dmsdio_status_invalid;
-    }
-    uint64_t ticks = (uint64_t)data->timeout_ms * st->clock_hz / 1000U;
-    st->data_read  = (data->direction == dmsdio_direction_read);
-    st->cursor     = (uint32_t*)data->buffer;
-    st->words_left = (uint32_t)(length / 4U);
-    st->data_busy  = true;
-
-    regs->DTIMER = (ticks > UINT32_MAX) ? UINT32_MAX : (uint32_t)ticks;
-    regs->DLEN   = (uint32_t)length;
-    regs->DCTRL  = STM32_SDIO_DCTRL_DTEN | (code << STM32_SDIO_DCTRL_DBLOCKSIZE_Pos) |
-                   (st->data_read ? STM32_SDIO_DCTRL_DTDIR_READ : 0U);
-    if (st->data_read)
-    {
-        mask_enable(regs, STM32_SDIO_STA_RXFIFOHF | STM32_SDIO_STA_DATAEND | data_error_flags());
-    }
-    return dmsdio_status_ok;
-}
 
 static uint32_t command_register(const dmsdio_command_t* command)
 {
@@ -487,10 +361,10 @@ static dmsdio_status_t send_command(volatile stm32_sdio_t* regs, stm32_sdio_stat
                   : (STM32_SDIO_STA_CMDREND | STM32_SDIO_STA_CCRCFAIL | STM32_SDIO_STA_CTIMEOUT);
     regs->ICR = STM32_SDIO_CMD_FLAGS;
     st->cmd_busy = true;
-    mask_enable(regs, done);
+    stm32_sdio_mask_enable(regs, done);
     regs->ARG = command->argument;
     regs->CMD = command_register(command);
-    if (!wait_phase(st, &st->cmd_busy, STM32_CMD_TIMEOUT_MS))
+    if (!stm32_sdio_wait(st, &st->cmd_busy, STM32_CMD_TIMEOUT_MS))
     {
         return dmsdio_status_cmd_timeout;
     }
@@ -506,41 +380,6 @@ static dmsdio_status_t send_command(volatile stm32_sdio_t* regs, stm32_sdio_stat
     return result;
 }
 
-static dmsdio_status_t data_result(uint32_t sta)
-{
-    if (sta & STM32_SDIO_STA_DTIMEOUT)
-    {
-        return dmsdio_status_data_timeout;
-    }
-    if (sta & (STM32_SDIO_STA_DCRCFAIL | stm32_sdio_family_error_flags))
-    {
-        return dmsdio_status_data_crc;
-    }
-    if (sta & (STM32_SDIO_STA_TXUNDERR | STM32_SDIO_STA_RXOVERR))
-    {
-        return dmsdio_status_overrun;
-    }
-    return dmsdio_status_ok;
-}
-
-static dmsdio_status_t run_data(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st, const dmsdio_data_t* data)
-{
-    if (!st->data_read)
-    {
-        mask_enable(regs, STM32_SDIO_STA_TXFIFOHE | STM32_SDIO_STA_DATAEND | data_error_flags());
-    }
-    uint64_t timeout = (uint64_t)data->timeout_ms * data->block_count + STM32_DATA_TIMEOUT_SLACK_MS;
-    if (!wait_phase(st, &st->data_busy, (timeout > UINT32_MAX) ? UINT32_MAX : (uint32_t)timeout))
-    {
-        return dmsdio_status_data_timeout;
-    }
-    if (st->words_left != 0 && data_result(st->data_status) == dmsdio_status_ok)
-    {
-        return dmsdio_status_overrun;       /* DATAEND without every word moved */
-    }
-    return data_result(st->data_status);
-}
-
 dmod_dmsdio_port_api_declaration(1.0, dmsdio_status_t, _execute,
     ( dmsdio_instance_t instance, const dmsdio_command_t* command,
       const dmsdio_data_t* data, dmsdio_response_t* response ))
@@ -550,16 +389,18 @@ dmod_dmsdio_port_api_declaration(1.0, dmsdio_status_t, _execute,
     {
         return dmsdio_status_invalid;
     }
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     drain_semaphore(st);
-    dmsdio_status_t status = (data != NULL) ? arm_data(regs, st, data) : dmsdio_status_ok;
+    dmsdio_status_t status = (data != NULL)
+                           ? stm32_sdio_data_arm(regs, st, get_desc(instance), data)
+                           : dmsdio_status_ok;
     if (status == dmsdio_status_ok)
     {
         status = send_command(regs, st, command, response);
     }
     if (status == dmsdio_status_ok && data != NULL)
     {
-        status = run_data(regs, st, data);
+        status = stm32_sdio_data_run(regs, st, data);
     }
     if (status != dmsdio_status_ok)
     {
@@ -575,18 +416,12 @@ dmod_dmsdio_port_api_declaration(1.0, void, _abort, ( dmsdio_instance_t instance
     {
         return;
     }
-    volatile stm32_sdio_t* regs = get_regs(instance);
+    volatile stm32_sdio_t* regs = stm32_sdio_regs(instance);
     regs->MASK  = 0;
     regs->CMD   = 0;                    /* stop the CPSM */
-    regs->DCTRL = 0;                    /* stop the DPSM */
+    stm32_sdio_data_abort(regs, st);
     register_settle();
-    for (uint32_t i = 0; i < STM32_SDIO_FIFO_WORDS && (regs->STA & STM32_SDIO_STA_RXDAVL); i++)
-    {
-        (void)regs->FIFO;
-    }
     regs->ICR = static_flags();
-    st->cmd_busy   = false;
-    st->data_busy  = false;
-    st->words_left = 0;
+    st->cmd_busy = false;
     drain_semaphore(st);
 }

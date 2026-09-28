@@ -18,8 +18,12 @@
 /** Logical block size used by every SD memory card supported by dmsdio. */
 #define DMSDIO_BLOCK_SIZE           512u
 
-/** Buffer alignment required for direct (zero-copy) port data transfers. */
-#define DMSDIO_TRANSFER_ALIGNMENT   4u
+/**
+ * Buffer alignment for direct (zero-copy) port data transfers. 16 bytes lets
+ * STM32 ports move data with 4-word DMA bursts that never cross a 1 KB
+ * boundary; misaligned caller buffers are bounced through an aligned block.
+ */
+#define DMSDIO_TRANSFER_ALIGNMENT   16u
 
 /** SD host controller instance (1-based, e.g. 1 = SDMMC1/SDIO). */
 typedef uint8_t dmsdio_instance_t;

@@ -12,13 +12,24 @@
 
 const stm32_sdio_instance_desc_t stm32_sdio_instances[] =
 {
-    /* SDIO: APB2 0x40012C00, RCC_APB2ENR.SDIOEN (bit 11), SDIO_IRQn 49 */
-    { 0x40012C00UL, 11U, 49U },
+    /* SDIO: APB2 0x40012C00, RCC_APB2ENR.SDIOEN (bit 11), SDIO_IRQn 49,
+     * DMA2 stream 3 or 6, channel 4 (RM0090 table 43) */
+    { 0x40012C00UL, 11U, 49U, 1U, { 3U, 6U }, 4U },
 };
 const uint8_t stm32_sdio_instance_count = sizeof(stm32_sdio_instances) / sizeof(stm32_sdio_instances[0]);
 
 /* STBITERR (start bit not detected on all data lines in wide bus mode) exists on F4 only. */
 const uint32_t stm32_sdio_family_error_flags = STM32_SDIO_STA_STBITERR;
+
+/* The DMA controllers cannot access the 64 KB CCM data RAM (RM0090 2.3.1). */
+#define STM32F4_CCM_START   0x10000000UL
+#define STM32F4_CCM_END     0x10010000UL
+
+bool stm32_sdio_family_dma_reachable(const void* address, size_t length)
+{
+    uintptr_t start = (uintptr_t)address;
+    return (start + length <= STM32F4_CCM_START) || (start >= STM32F4_CCM_END);
+}
 
 /* ---- DMOD lifecycle ---- */
 
