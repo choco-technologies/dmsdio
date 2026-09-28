@@ -1,76 +1,44 @@
-/**
- * @file port.c
- * @brief dmsdio_port for STM32F7 (SDMMC) - not implemented yet.
- *
- * The SDMMC register-level implementation (command/response path, IDMA
- * data path, interrupts, clock divider from dmclk_port's sdio domain,
- * pin configuration) is delivered by choco-technologies/dmod-ecosystem#12.
- * Until then every entry point reports -ENOTSUP / dmsdio_status_not_supported,
- * so dmsdio's dmdrvi_create() fails loudly instead of pretending a card is
- * reachable.
- */
 #define DMOD_ENABLE_REGISTRATION    ON
 #include "dmsdio_port.h"
 #include "dmod.h"
-#include <errno.h>
+#include "../stm32_common/stm32_common.h"
+
+/*
+ * STM32F7 SDMMC (RM0385 section 35 / RM0410 section 35). The host logic is
+ * shared with STM32F4 in stm32_common; this file only describes the F7
+ * instances and IRQs.
+ */
+
+/* ---- Family description ---- */
+
+const stm32_sdio_instance_desc_t stm32_sdio_instances[] =
+{
+    /* SDMMC1: APB2 0x40012C00, RCC_APB2ENR.SDMMC1EN (bit 11), SDMMC1_IRQn 49 */
+    { 0x40012C00UL, 11U, 49U },
+    /* SDMMC2 (STM32F76x/F77x only): APB2 0x40011C00, RCC_APB2ENR.SDMMC2EN (bit 7), SDMMC2_IRQn 103 */
+    { 0x40011C00UL, 7U, 103U },
+};
+const uint8_t stm32_sdio_instance_count = sizeof(stm32_sdio_instances) / sizeof(stm32_sdio_instances[0]);
+
+/* SDMMC has no STBITERR (STA bit 9 is reserved on F7). */
+const uint32_t stm32_sdio_family_error_flags = 0U;
+
+/* ---- DMOD lifecycle ---- */
 
 int dmod_init(const Dmod_Config_t *Config)
 {
     (void)Config;
+    stm32_sdio_common_init();
     return 0;
 }
 
 int dmod_deinit(void)
 {
+    stm32_sdio_common_deinit();
     return 0;
 }
 
-dmod_dmsdio_port_api_declaration(1.0, int, _host_init, ( dmsdio_instance_t instance ))
-{
-    DMOD_LOG_ERROR("dmsdio_port: SDMMC%u host is not supported by this port yet\n", (unsigned)instance);
-    return -ENOTSUP;
-}
+/* ---- IRQ handlers ---- */
 
-dmod_dmsdio_port_api_declaration(1.0, int, _host_deinit, ( dmsdio_instance_t instance ))
-{
-    (void)instance;
-    return -ENOTSUP;
-}
-
-dmod_dmsdio_port_api_declaration(1.0, int, _set_power, ( dmsdio_instance_t instance, bool on ))
-{
-    (void)instance;
-    (void)on;
-    return -ENOTSUP;
-}
-
-dmod_dmsdio_port_api_declaration(1.0, int, _set_clock, ( dmsdio_instance_t instance, uint32_t max_hz, uint32_t* actual_hz ))
-{
-    (void)instance;
-    (void)max_hz;
-    (void)actual_hz;
-    return -ENOTSUP;
-}
-
-dmod_dmsdio_port_api_declaration(1.0, int, _set_bus_width, ( dmsdio_instance_t instance, dmsdio_bus_width_t width ))
-{
-    (void)instance;
-    (void)width;
-    return -ENOTSUP;
-}
-
-dmod_dmsdio_port_api_declaration(1.0, dmsdio_status_t, _execute,
-    ( dmsdio_instance_t instance, const dmsdio_command_t* command,
-      const dmsdio_data_t* data, dmsdio_response_t* response ))
-{
-    (void)instance;
-    (void)command;
-    (void)data;
-    (void)response;
-    return dmsdio_status_not_supported;
-}
-
-dmod_dmsdio_port_api_declaration(1.0, void, _abort, ( dmsdio_instance_t instance ))
-{
-    (void)instance;
-}
+DMOD_IRQ_HANDLER(49)  { stm32_sdio_irq_handler(1); }    /* SDMMC1 */
+DMOD_IRQ_HANDLER(103) { stm32_sdio_irq_handler(2); }    /* SDMMC2 */

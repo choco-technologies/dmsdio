@@ -16,26 +16,37 @@ set(DMOD_STACK_SIZE         1024)
 # Path to the DMR file for this module
 set(DMOD_DMR_PATH           ${CMAKE_SOURCE_DIR}/dmsdio_port.dmr)
 
-#
-#   dmod_add_library - create a library module
-#   it has the same signature as add_library
-#   and can be used in the same way after the creation
-#   (for example, to link libraries)
-#
-# Extra sources of a CPU family (e.g. the x86_64 simulated card model).
+# Extra sources of a CPU family. Every STM32 family shares the same
+# SDIO/SDMMC host IP (see src/port/stm32_common), the x86_64 family is the
+# simulated card used by the tests.
 set(FAMILY_SOURCES "")
-if(DMOD_CPU_FAMILY STREQUAL "x86_64")
+if(DMOD_CPU_FAMILY MATCHES "^stm32")
+    set(FAMILY_SOURCES stm32_common/stm32_common.c)
+elseif(DMOD_CPU_FAMILY STREQUAL "x86_64")
     set(FAMILY_SOURCES
         x86_64/mock_card.c
         x86_64/mock_registers.c
     )
 endif()
 
+#
+#   dmod_add_library - create a library module
+#   it has the same signature as add_library
+#   and can be used in the same way after the creation
+#   (for example, to link libraries)
+#
 dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     ${DMOD_CPU_FAMILY}/port.c
     ${FAMILY_SOURCES}
 )
+
+if(DMOD_CPU_FAMILY MATCHES "^stm32")
+    dmod_link_modules(${DMOD_MODULE_NAME}
+        dmclk_port
+        dmosi
+    )
+endif()
 
 target_include_directories(${DMOD_MODULE_NAME} BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/include

@@ -68,5 +68,37 @@ block is 32-byte aligned so a port can do cache maintenance on it.
 
 | Family | Status |
 |--------|--------|
+| `stm32f4` | SDIO (RM0090 section 31), one instance. Thin wrapper over `stm32_common` |
+| `stm32f7` | SDMMC1 and SDMMC2 (SDMMC2 on F76x/F77x only), RM0385/RM0410 section 35. Thin wrapper over `stm32_common` |
 | `x86_64` | Simulated SD card for the automated tests (`dmsdio_mock.h`: card types SDSC v1/v2, SDHC, SDXC, fault injection, removal, counters). Never released - CI and the release workflow exclude it from the hardware matrix |
-| `stm32f7` | Placeholder: every call reports `-ENOTSUP`, so `dmdrvi_create()` fails loudly. The SDMMC implementation is tracked in choco-technologies/dmod-ecosystem#12 |
+
+### STM32 (`src/port/stm32_common`)
+
+STM32F4 SDIO and STM32F7 SDMMC are the same host IP: identical register
+offsets and bit positions for everything the port uses. The shared code in
+`stm32_common/stm32_common.c` implements the whole port API; each family's
+`port.c` only provides:
+
+* `stm32_sdio_instances[]` - base address, `RCC_APB2ENR`/`RCC_APB2RSTR` bit and NVIC IRQ per instance,
+* `stm32_sdio_family_error_flags` - `STBITERR` on F4 (the bit is reserved on F7),
+* `dmod_init`/`dmod_deinit` and the `DMOD_IRQ_HANDLER`s.
+
+Implementation notes:
+
+* The kernel clock is read from `dmclk_port_get_domain_frequency(dmclk_domain_sdio)`
+  (48 MHz CLK48/PLL48CLK). `_host_init` fails with `-EIO` when it is not running.
+  `SDIO_CK = SDIOCLK / (CLKDIV + 2)`, or `SDIOCLK` itself with `BYPASS` when the
+  requested maximum is at least the source (High Speed: 48 MHz).
+* Commands complete on `CMDREND`/`CMDSENT`/`CCRCFAIL`/`CTIMEOUT` interrupts.
+  `CCRCFAIL` is ignored for R3 (`dmsdio_response_short_no_crc`).
+* Data is moved by the interrupt handler from/to the 32-word FIFO
+  (`RXFIFOHF`/`TXFIFOHE`, 8 words per interrupt) until `DATAEND` or a data
+  error. For reads the DPSM and FIFO interrupts are armed before the command
+  is sent; for writes the FIFO is fed only after a valid response. `DTIMER`
+  holds the per-block timeout; every wait is additionally bounded in software.
+* DMA is not used: SDIO/SDMMC need a DMA2 stream (stream 3 or 6, channel 4)
+  in FIFO mode with 4-beat bursts and peripheral flow control, which the
+  dmdma lease API does not expose yet. Hardware flow control (`HWFC_EN`) is
+  not used either, because of the SDIO_CK glitch erratum (ES0182).
+* Pins (AF12, pull-ups on CMD/D0-D3) are configured by dmgpio from the board
+  files in [`configs/`](../configs/README.md), not by the port.

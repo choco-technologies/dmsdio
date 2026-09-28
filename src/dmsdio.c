@@ -1,6 +1,7 @@
 #define DMOD_ENABLE_REGISTRATION ON
 #include "dmsdio_internal.h"
 #include "dmsdio_sd.h"
+#include <stdint.h>
 #include <string.h>
 
 /*
@@ -223,10 +224,12 @@ static int check_io(struct dmdrvi_context* ctx, const dmsdio_handle_t* h, const 
     {
         return -EINVAL;
     }
+#if SIZE_MAX > INT64_MAX
     if ((uint64_t)size > (uint64_t)INT64_MAX)
     {
         return -EOVERFLOW;
     }
+#endif
     if (!is_valid_context(ctx) || !is_valid_handle(h) || (buffer == NULL && size != 0))
     {
         return -EINVAL;

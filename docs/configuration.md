@@ -61,8 +61,10 @@ interrupt_trigger=both_edges
 interrupt_handler=sd0_card_detect
 ```
 
-The SD bus pins themselves (CLK, CMD, DAT0-3) are configured by the board
-files of the hardware ports.
+The SD bus pins themselves (CK, CMD, D0-D3: AF12, pull-ups on CMD and
+D0-D3) are dmgpio devices of the same group - see the complete board files
+in [../configs/](../configs/README.md) for STM32F746G-DISCO and
+STM32F407G-DISC1.
 
 dmdevfs reports the GPIO node to dmsdio through `dmdrvi_friend_changed()`.
 The interrupt only enqueues an event (dmhaman handler, ISR context); a dmosi
