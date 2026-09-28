@@ -19,16 +19,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build dmsdio core module
+      - name: Build dmsdio core module and tests
         run: |
           mkdir -p build
           cd build
-          # dmsdio links against dmsdio_port_if (headers only),
-          # not dmsdio_port itself, so building only these two targets
-          # never touches src/port/*/port.c - safe to build natively here
-          # regardless of which CPU family the port defaults to.
+          # dmsdio links against dmsdio_port_if (headers only), so building
+          # these targets never touches src/port/*/port.c. DMOD_CPU_FAMILY
+          # stays at its default (stm32f7) here on purpose: dmsdio uses
+          # dmgpio's types for its card-detect friend and dmgpio only
+          # publishes stm32 packages, so an x86_64 header fetch would 404.
           cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64
           cmake --build . --target dmsdio test_dmsdio
+
+      - name: Build simulated-card dmsdio_port (x86_64)
+        run: |
+          # src/port/x86_64 is not a hardware port: it simulates an SD card
+          # at the command level so the whole protocol in dmsdio can run on
+          # this runner. Separate build dir so DMOD_CPU_FAMILY=x86_64 cannot
+          # affect the dmgpio header fetch above.
+          mkdir -p build_port_x86_64
+          cd build_port_x86_64
+          cmake .. -DDMOD_MODE=DMOD_MODULE -DDMOD_TOOLS_NAME=arch/x86_64 -DDMOD_CPU_FAMILY=x86_64
+          cmake --build . --target dmsdio_port
+          cp dmf/dmsdio_port.dmf dmf/dmsdio_port.dmd ../build/dmf/
 
       - name: Verify module files
         run: |
@@ -37,11 +50,17 @@ jobs:
           test -f build/dmf/dmsdio.dmf
           test -f build/dmf/dmsdio_version.txt
           test -f build/dmf/test_dmsdio.dmf
+          test -f build/dmf/dmsdio_port.dmf
           echo "Module files present"
 
       - name: Run tests with dmod_loader
         run: |
           export DMOD_DMF_DIR=$(pwd)/build/dmf
+          # Runtime dependencies of dmsdio/test_dmsdio (see build/dmf/*.dmd).
+          # dmsdio_port is the simulated card built above - it is never
+          # published for x86_64, so it is not fetched here.
+          dmf-get install dmini -y
+          dmf-get install dmhaman -y
           dmod_loader build/dmf/test_dmsdio.dmf
 
   discover-cpu-families:
@@ -58,9 +77,12 @@ jobs:
       - name: List available CPU families
         id: list-families
         run: |
-          # Find all CPU families by looking for directories containing port.c
+          # Find all CPU families by looking for directories containing port.c.
+          # x86_64 is the simulated card used by the test job above, not a
+          # hardware family.
           CPU_FAMILIES=$(find src/port -mindepth 2 -maxdepth 2 -name "port.c" -type f -printf '%h\n' | \
             xargs -n1 basename | \
+            grep -vx x86_64 | \
             sort | \
             jq -R -s -c 'split("\n") | map(select(length > 0))')
 

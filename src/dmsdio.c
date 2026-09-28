@@ -1,84 +1,437 @@
 #define DMOD_ENABLE_REGISTRATION ON
-#include "dmod.h"
-#include "dmsdio.h"
+#include "dmsdio_internal.h"
+#include "dmsdio_sd.h"
+#include <string.h>
 
-/* Example internal state - replace with your module's real fields. */
-struct dmsdio
-{
-    bool valid;
-};
+/*
+ * dmdrvi 2.0 device model.
+ *
+ *   /dev/dmsdioN     persistent host node (major only). Status/rescan ioctls.
+ *   /dev/dmsdioN/0   card node (major+minor 0), announced through
+ *                    dmdrvi_device_available() once a card is identified and
+ *                    withdrawn through dmdrvi_device_unavailable() when it
+ *                    goes away. Byte-addressed 64-bit block device.
+ *
+ * All bus operations of one host are serialized by ctx->lock. Handles to the
+ * card node carry the card generation they were opened for.
+ */
 
-dmod_dmsdio_api_declaration(1.0, dmsdio_t, _create, ( void ))
+#define SCRATCH_ALIGNMENT   32u     /* cache line: safe for DMA cache maintenance */
+
+static bool is_valid_context(struct dmdrvi_context* ctx)
 {
-    /* Dmod_Malloc/Dmod_Free (SAL) are dmod's own heap functions - embedded
-     * targets don't necessarily link a libc allocator, so use these instead
-     * of malloc()/free() in module code. */
-    struct dmsdio *instance = Dmod_Malloc(sizeof(*instance));
-    if (instance == NULL)
+    return ctx != NULL && ctx->magic == DMSDIO_CONTEXT_MAGIC;
+}
+
+static bool is_valid_handle(const dmsdio_handle_t* handle)
+{
+    return handle != NULL && handle->magic == DMSDIO_HANDLE_MAGIC;
+}
+
+/* Lock held: is the handle's card still the attached one? */
+static int check_card_handle(struct dmdrvi_context* ctx, const dmsdio_handle_t* handle)
+{
+    if (!handle->is_card)
+    {
+        return -ENOTSUP;
+    }
+    if (!dmsdio_card_attached(ctx))
+    {
+        return -ENODEV;
+    }
+    return (handle->generation == ctx->card.generation) ? 0 : -ESTALE;
+}
+
+static void destroy_context(struct dmdrvi_context* ctx, bool port_ready)
+{
+    dmsdio_detect_stop(ctx);
+    if (port_ready)
+    {
+        dmsdio_port_set_power(ctx->config.instance, false);
+        dmsdio_port_host_deinit(ctx->config.instance);
+    }
+    if (ctx->lock != NULL)
+    {
+        dmosi_mutex_destroy(ctx->lock);
+    }
+    if (ctx->cd_lock != NULL)
+    {
+        dmosi_mutex_destroy(ctx->cd_lock);
+    }
+    Dmod_Free(ctx->scratch);
+    dmsdio_config_release(&ctx->config);
+    ctx->magic = 0;
+    Dmod_Free(ctx);
+}
+
+static int allocate_resources(struct dmdrvi_context* ctx)
+{
+    ctx->scratch = Dmod_AlignedMalloc(DMSDIO_BLOCK_SIZE, SCRATCH_ALIGNMENT);
+    ctx->lock    = dmosi_mutex_create(false);
+    ctx->cd_lock = dmosi_mutex_create(false);
+    if (ctx->scratch == NULL || ctx->lock == NULL || ctx->cd_lock == NULL)
+    {
+        DMOD_LOG_ERROR("dmsdio: out of memory\n");
+        return -ENOMEM;
+    }
+    return 0;
+}
+
+/* ---- DMOD lifecycle ---- */
+
+int dmod_init(const Dmod_Config_t *Config)
+{
+    (void)Config;
+    return 0;
+}
+
+int dmod_deinit(void)
+{
+    return 0;
+}
+
+/* ---- dmdrvi: context ---- */
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_context_t, _create,
+    ( dmini_context_t config, dmdrvi_dev_num_t* dev_num ))
+{
+    if (config == NULL || dev_num == NULL)
     {
         return NULL;
     }
-
-    instance->valid = true;
-    return instance;
-}
-
-dmod_dmsdio_api_declaration(1.0, void, _destroy, ( dmsdio_t handle ))
-{
-    Dmod_Free(handle);
-}
-
-dmod_dmsdio_api_declaration(1.0, bool, _is_valid, ( dmsdio_t handle ))
-{
-    return handle != NULL && handle->valid;
-}
-
-/**
- * @brief Pre-initialization function for the module.
- *
- * @note This function is optional. You can remove it if you don't need it.
- *
- * This function is called when the module enabling is in progress.
- *
- * You can use this function to load the required dependencies, such as
- * other modules. Please be aware that the module is not fully initialized,
- * so not all the API functions are available - you can check if the API
- * is connected by calling the Dmod_IsFunctionConnected() function.
- */
-void dmod_preinit(void)
-{
-    if(Dmod_IsFunctionConnected( Dmod_Printf ))
+    struct dmdrvi_context* ctx = Dmod_Malloc(sizeof(*ctx));
+    if (ctx == NULL)
     {
-        Dmod_Printf("API is connected!\n");
+        return NULL;
+    }
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->magic = DMSDIO_CONTEXT_MAGIC;
+
+    if (dmsdio_config_read(config, &ctx->config) != 0 || allocate_resources(ctx) != 0)
+    {
+        destroy_context(ctx, false);
+        return NULL;
+    }
+    int ret = dmsdio_port_host_init(ctx->config.instance);
+    if (ret != 0)
+    {
+        DMOD_LOG_ERROR("dmsdio: host %u initialization failed (%d)\n", (unsigned)ctx->config.instance, ret);
+        destroy_context(ctx, false);
+        return NULL;
+    }
+    if (dmsdio_detect_start(ctx) != 0)
+    {
+        destroy_context(ctx, true);
+        return NULL;
+    }
+    memset(dev_num, 0, sizeof(*dev_num));
+    dev_num->flags = DMDRVI_NUM_MAJOR;
+    dev_num->major = ctx->config.major;
+    return ctx;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _free, ( dmdrvi_context_t context ))
+{
+    if (!is_valid_context(context))
+    {
+        return;
+    }
+    /* dmdevfs is tearing this context down itself - no unavailable notice. */
+    destroy_context(context, true);
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _friend_changed,
+    ( dmdrvi_context_t context, const dmdrvi_friend_info_t* info ))
+{
+    if (!is_valid_context(context) || info == NULL || info->friend_role == NULL ||
+        strcmp(info->friend_role, "card_detect") != 0)
+    {
+        return;
+    }
+    bool ready = (info->state == dmdrvi_dev_state_ready && info->node_path != NULL);
+    dmsdio_detect_set_cd_path(context, ready ? info->node_path : NULL);
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _path_ready,
+    ( dmdrvi_context_t context, const dmdrvi_dev_num_t* dev_num, const char* path ))
+{
+    (void)path;
+    if (!is_valid_context(context) || dev_num == NULL || (dev_num->flags & DMDRVI_NUM_MINOR) != 0)
+    {
+        return;     /* only the host node's registration matters */
+    }
+    dmsdio_lock(context);
+    dmsdio_card_host_ready(context);
+    dmsdio_unlock(context);
+}
+
+/* ---- dmdrvi: handles ---- */
+
+static bool is_card_dev_num(const dmdrvi_dev_num_t* dev_num)
+{
+    return (dev_num->flags & DMDRVI_NUM_MINOR) != 0;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void*, _open,
+    ( dmdrvi_context_t context, int flags, const dmdrvi_dev_num_t* dev_num ))
+{
+    if (!is_valid_context(context) || dev_num == NULL ||
+        (is_card_dev_num(dev_num) && dev_num->minor != DMSDIO_CARD_MINOR))
+    {
+        return NULL;
+    }
+    dmsdio_handle_t* handle = Dmod_Malloc(sizeof(*handle));
+    if (handle == NULL)
+    {
+        return NULL;
+    }
+    handle->magic   = DMSDIO_HANDLE_MAGIC;
+    handle->is_card = is_card_dev_num(dev_num);
+    handle->flags   = flags;
+
+    dmsdio_lock(context);
+    bool usable = !handle->is_card || dmsdio_card_attached(context);
+    handle->generation = context->card.generation;
+    dmsdio_unlock(context);
+
+    if (!usable)
+    {
+        handle->magic = 0;
+        Dmod_Free(handle);
+        return NULL;
+    }
+    return handle;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _close, ( dmdrvi_context_t context, void* handle ))
+{
+    dmsdio_handle_t* h = (dmsdio_handle_t*)handle;
+    if (!is_valid_context(context) || !is_valid_handle(h))
+    {
+        return;
+    }
+    h->magic = 0;
+    Dmod_Free(h);
+}
+
+/* ---- dmdrvi: data path ---- */
+
+static int check_io(struct dmdrvi_context* ctx, const dmsdio_handle_t* h, const void* buffer,
+                    size_t size, dmdrvi_offset_t offset, int forbidden_flag)
+{
+    if (offset < 0)
+    {
+        return -EINVAL;
+    }
+    if ((uint64_t)size > (uint64_t)INT64_MAX)
+    {
+        return -EOVERFLOW;
+    }
+    if (!is_valid_context(ctx) || !is_valid_handle(h) || (buffer == NULL && size != 0))
+    {
+        return -EINVAL;
+    }
+    if (!h->is_card)
+    {
+        return -ENOTSUP;
+    }
+    return (h->flags == forbidden_flag) ? -EBADF : 0;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_ssize_t, _read,
+    ( dmdrvi_context_t context, void* handle, void* buffer, size_t size, dmdrvi_offset_t offset ))
+{
+    dmsdio_handle_t* h = (dmsdio_handle_t*)handle;
+    int ret = check_io(context, h, buffer, size, offset, DMDRVI_O_WRONLY);
+    if (ret != 0 || size == 0)
+    {
+        return ret;
+    }
+    dmsdio_lock(context);
+    dmdrvi_ssize_t result = check_card_handle(context, h);
+    if (result == 0)
+    {
+        result = dmsdio_io_read(context, (uint8_t*)buffer, size, (uint64_t)offset);
+    }
+    dmsdio_unlock(context);
+    return result;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_ssize_t, _write,
+    ( dmdrvi_context_t context, void* handle, const void* buffer, size_t size, dmdrvi_offset_t offset ))
+{
+    dmsdio_handle_t* h = (dmsdio_handle_t*)handle;
+    int ret = check_io(context, h, buffer, size, offset, DMDRVI_O_RDONLY);
+    if (ret != 0 || size == 0)
+    {
+        return ret;
+    }
+    dmsdio_lock(context);
+    dmdrvi_ssize_t result = check_card_handle(context, h);
+    if (result == 0)
+    {
+        result = dmsdio_io_write(context, (const uint8_t*)buffer, size, (uint64_t)offset);
+    }
+    dmsdio_unlock(context);
+    return result;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, int, _flush, ( dmdrvi_context_t context, void* handle ))
+{
+    dmsdio_handle_t* h = (dmsdio_handle_t*)handle;
+    if (!is_valid_context(context) || !is_valid_handle(h))
+    {
+        return -EINVAL;
+    }
+    if (!h->is_card)
+    {
+        return 0;
+    }
+    dmsdio_lock(context);
+    int ret = check_card_handle(context, h);
+    if (ret == 0)
+    {
+        ret = dmsdio_cmd_wait_ready(context, context->config.write_timeout_ms);
+    }
+    dmsdio_unlock(context);
+    return ret;
+}
+
+/* ---- dmdrvi: control ---- */
+
+static void fill_host_info(struct dmdrvi_context* ctx, dmsdio_host_info_t* info)
+{
+    info->instance      = ctx->config.instance;
+    info->card_attached = dmsdio_card_attached(ctx);
+    info->generation    = ctx->generation;
+    info->scan_count    = ctx->scan_count;
+    info->last_error    = ctx->last_error;
+    info->retry_count   = ctx->retry_count;
+}
+
+static void fill_block_info(struct dmdrvi_context* ctx, dmdrvi_block_info_t* info)
+{
+    const dmsdio_card_info_t* card = &ctx->card;
+    bool erase = (card->csd.ccc & SD_CCC_ERASE) != 0;
+    info->logical_block_size = DMSDIO_BLOCK_SIZE;
+    info->erase_block_size   = erase ? DMSDIO_BLOCK_SIZE : 0;
+    info->block_count        = card->block_count;
+    info->flags              = DMDRVI_BLOCK_FLAG_REMOVABLE
+                             | (erase ? DMDRVI_BLOCK_FLAG_ERASE_SUPPORTED : 0u)
+                             | (card->ssr.discard_supported ? DMDRVI_BLOCK_FLAG_DISCARD_SUPPORTED : 0u)
+                             | (card->write_protected ? DMDRVI_BLOCK_FLAG_READ_ONLY : 0u);
+}
+
+/* Lock held. Controls available on the host node (and the card node). */
+static int host_ioctl(struct dmdrvi_context* ctx, const dmsdio_handle_t* h, int command, void* arg)
+{
+    switch (command)
+    {
+        case dmsdio_ioctl_cmd_get_host_info:
+            fill_host_info(ctx, (dmsdio_host_info_t*)arg);
+            return 0;
+        case dmsdio_ioctl_cmd_get_card_info:
+        {
+            int ret = h->is_card ? check_card_handle(ctx, h)
+                                 : (dmsdio_card_attached(ctx) ? 0 : -ENODEV);
+            if (ret == 0)
+            {
+                *(dmsdio_card_info_t*)arg = ctx->card;
+            }
+            return ret;
+        }
+        case dmsdio_ioctl_cmd_rescan:
+            return h->is_card ? -ENOTSUP : dmsdio_card_scan(ctx);
+        default:
+            return -ENOTTY;
     }
 }
 
-/**
- * @brief Initialization function for the module.
- *
- * This function is called when the module is enabled.
- * Please use this function to initialize the module, for instance:
- * - initialize the module variables
- * - initialize the module hardware
- * - allocate memory
- */
-int dmod_init(const Dmod_Config_t *Config)
+/* Lock held. Block device controls of the card node. */
+static int card_ioctl(struct dmdrvi_context* ctx, const dmsdio_handle_t* h, int command, void* arg)
 {
-    Dmod_Printf("Hello, World!\n");
-    return 0;
+    int ret = check_card_handle(ctx, h);
+    if (ret != 0)
+    {
+        return ret;
+    }
+    dmdrvi_block_info_t info;
+    fill_block_info(ctx, &info);
+    switch (command)
+    {
+        case DMDRVI_IOCTL_BLOCK_GET_INFO:
+            *(dmdrvi_block_info_t*)arg = info;
+            return 0;
+        case DMDRVI_IOCTL_BLOCK_ERASE:
+        case DMDRVI_IOCTL_BLOCK_DISCARD:
+        {
+            bool discard = (command == DMDRVI_IOCTL_BLOCK_DISCARD);
+            uint32_t needed = discard ? DMDRVI_BLOCK_FLAG_DISCARD_SUPPORTED : DMDRVI_BLOCK_FLAG_ERASE_SUPPORTED;
+            if ((info.flags & needed) == 0)
+            {
+                return -ENOTSUP;
+            }
+            return (h->flags == DMDRVI_O_RDONLY) ? -EBADF
+                 : dmsdio_io_erase_range(ctx, (const dmdrvi_block_range_t*)arg, discard);
+        }
+        default:
+            return -ENOTTY;
+    }
 }
 
-/**
- * @brief De-initialization function for the module.
- *
- * This function is called when the module is disabled.
- * Please use this function to de-initialize the module, for instance:
- * - free memory
- * - de-initialize the module hardware
- * - de-initialize the module variables
- */
-int dmod_deinit(void)
+static bool is_block_ioctl(int command)
 {
-    Dmod_Printf("Goodbye, World!\n");
-    return 0;
+    return command == DMDRVI_IOCTL_BLOCK_GET_INFO || command == DMDRVI_IOCTL_BLOCK_ERASE ||
+           command == DMDRVI_IOCTL_BLOCK_DISCARD;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, int, _ioctl,
+    ( dmdrvi_context_t context, void* handle, int command, void* arg ))
+{
+    dmsdio_handle_t* h = (dmsdio_handle_t*)handle;
+    if (!is_valid_context(context) || !is_valid_handle(h))
+    {
+        return -EINVAL;
+    }
+    if (arg == NULL && command != dmsdio_ioctl_cmd_rescan)
+    {
+        return -EINVAL;
+    }
+    dmsdio_lock(context);
+    int ret = is_block_ioctl(command)
+            ? (h->is_card ? card_ioctl(context, h, command, arg) : -ENOTTY)
+            : host_ioctl(context, h, command, arg);
+    dmsdio_unlock(context);
+    return ret;
+}
+
+/* "/dev/dmsdio0/0" (or "/dmsdio0/0" relative to the mount) is the card node. */
+static bool is_card_path(const char* path)
+{
+    const char* last = strrchr(path, '/');
+    return last != NULL && last != path && strcmp(last + 1, "0") == 0;
+}
+
+dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, int, _stat,
+    ( dmdrvi_context_t context, const char* path, dmdrvi_stat_t* stat ))
+{
+    if (!is_valid_context(context) || path == NULL || stat == NULL)
+    {
+        return -EINVAL;
+    }
+    stat->size = 0;
+    stat->mode = 0666;
+    if (!is_card_path(path))
+    {
+        return 0;
+    }
+    dmsdio_lock(context);
+    int ret = dmsdio_card_attached(context) ? 0 : -ENODEV;
+    if (ret == 0)
+    {
+        stat->size = context->card.capacity_bytes;
+        stat->mode = context->card.write_protected ? 0444 : 0666;
+    }
+    dmsdio_unlock(context);
+    return ret;
 }

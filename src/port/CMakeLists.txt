@@ -22,19 +22,25 @@ set(DMOD_DMR_PATH           ${CMAKE_SOURCE_DIR}/dmsdio_port.dmr)
 #   and can be used in the same way after the creation
 #   (for example, to link libraries)
 #
+# Extra sources of a CPU family (e.g. the x86_64 simulated card model).
+set(FAMILY_SOURCES "")
+if(DMOD_CPU_FAMILY STREQUAL "x86_64")
+    set(FAMILY_SOURCES
+        x86_64/mock_card.c
+        x86_64/mock_registers.c
+    )
+endif()
+
 dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     ${DMOD_CPU_FAMILY}/port.c
+    ${FAMILY_SOURCES}
 )
-
-# To depend on another module's headers, use:
-#   dmod_link_modules(${DMOD_MODULE_NAME}
-#       other_module@1.0
-#   )
 
 target_include_directories(${DMOD_MODULE_NAME} BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/${DMOD_CPU_FAMILY}
 )
 
 target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE

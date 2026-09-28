@@ -30,7 +30,7 @@ set(DMOD_BUILD_TEMPLATES OFF CACHE BOOL "Build templates")
 FetchContent_MakeAvailable(dmod)
 
 project(dmsdio VERSION ${DMOD_MODULE_VERSION}
-    DESCRIPTION "dmsdio DMOD library module"
+    DESCRIPTION "SD memory card driver (SDSC/SDHC/SDXC) for DMOD"
     LANGUAGES C CXX)
 
 set(DMOD_DIR ${dmod_SOURCE_DIR} CACHE PATH "DMOD source directory")
@@ -65,6 +65,22 @@ set(DMOD_DIF_IMPLS          )
 dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     # List of source files - can include C and C++ files
     src/dmsdio.c
+    src/dmsdio_card.c
+    src/dmsdio_cmd.c
+    src/dmsdio_config.c
+    src/dmsdio_decode.c
+    src/dmsdio_detect.c
+    src/dmsdio_ident.c
+    src/dmsdio_io.c
+    src/dmsdio_xfer.c
+)
+
+dmod_link_modules(${DMOD_MODULE_NAME}
+    dmdrvi@2.0
+    dmini
+    dmosi
+    dmhaman
+    dmgpio
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
@@ -74,11 +90,6 @@ target_include_directories(${DMOD_MODULE_NAME} PRIVATE
 target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-
-# To depend on another module's headers, use:
-#   dmod_link_modules(${DMOD_MODULE_NAME}
-#       other_module@1.0
-#   )
 
 add_subdirectory(src/port)
 target_link_libraries(${DMOD_MODULE_NAME} ${DMOD_MODULE_NAME}_port_if)
