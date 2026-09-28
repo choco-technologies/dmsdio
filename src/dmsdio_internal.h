@@ -8,7 +8,6 @@
 #include "dmini.h"
 #include "dmosi.h"
 #include "dmgpio_types.h"
-#include "libsystemd.h"
 #include <errno.h>
 
 /*
@@ -23,9 +22,6 @@
 
 /* Card node minor number below the host node (/dev/dmsdioN/0). */
 #define DMSDIO_CARD_MINOR           0u
-
-/* Device class reported to libsystemd for the host node (see dmsdiod). */
-#define DMSDIO_LIBSYSTEMD_DEVICE_CLASS  "sdio"
 
 /**
  * @brief Configuration read from the dmdrvi ini section.
@@ -45,8 +41,8 @@ typedef struct
     uint32_t            max_blocks_per_transfer;/**< Split larger requests */
     bool                cd_active_high;         /**< Card detect polarity */
     /* Presence monitoring policy - not used by the driver itself, handed to
-     * the dmsdiod service through dmsdio_ioctl_cmd_get_detect_config. */
-    dmsdio_detect_config_t detect;
+     * the monitor service through DMDRVI_IOCTL_MONITOR_GET_POLICY. */
+    dmdrvi_monitor_policy_t monitor;
 } dmsdio_config_t;
 
 /**
@@ -66,6 +62,7 @@ struct dmdrvi_context
     volatile bool       removal_pending;/**< Card detect says removed; set without the lock */
     bool                host_ready;     /**< dmdevfs knows the host node (path_ready) */
     bool                card_announced; /**< Card node announced to dmdevfs */
+    uint32_t            announced_generation; /**< Card generation the announcement is for */
     dmosi_mutex_t       cd_lock;        /**< Guards cd_path (never held across bus work) */
     char*               cd_path;        /**< Card detect GPIO node, NULL = none */
 };
@@ -109,7 +106,6 @@ int  dmsdio_io_erase_range(struct dmdrvi_context* ctx, const dmdrvi_block_range_
 
 /* --- dmsdio_card.c: attach/detach bookkeeping --- */
 int  dmsdio_card_scan(struct dmdrvi_context* ctx);
-void dmsdio_card_host_ready(struct dmdrvi_context* ctx);
 void dmsdio_card_detach(struct dmdrvi_context* ctx);
 int  dmsdio_card_lost(struct dmdrvi_context* ctx, int error);
 bool dmsdio_card_attached(const struct dmdrvi_context* ctx);
@@ -117,7 +113,7 @@ bool dmsdio_card_attached(const struct dmdrvi_context* ctx);
 /* --- dmsdio_detect.c: card detect pin --- */
 void dmsdio_detect_set_cd_path(struct dmdrvi_context* ctx, const char* path);
 int  dmsdio_detect_read_cd(struct dmdrvi_context* ctx, bool* present);
-int  dmsdio_detect_check_removal(struct dmdrvi_context* ctx);
+int  dmsdio_detect_event(struct dmdrvi_context* ctx);
 void dmsdio_detect_release(struct dmdrvi_context* ctx);
 
 /* --- helpers --- */

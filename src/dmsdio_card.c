@@ -9,6 +9,13 @@
  * generation they were opened for, so a handle opened for a card that has
  * since been removed (or replaced by another card) is rejected with -ESTALE
  * instead of silently touching the wrong medium.
+ *
+ * Attach and detach only change the driver's own state. The card node is
+ * announced and withdrawn in one place - at the end of dmsdio_card_scan(),
+ * i.e. DMDRVI_IOCTL_MONITOR_REFRESH - as the dmdrvi monitor contract
+ * requires. A transfer that finds the card gone detaches it at once (the
+ * handles go stale, I/O fails with -ENODEV), and the next REFRESH withdraws
+ * the node.
  */
 
 static const char* type_name(dmsdio_card_type_t type)
@@ -23,11 +30,6 @@ static const char* type_name(dmsdio_card_type_t type)
     }
 }
 
-/*
- * dmdevfs drops hot-plug notices for a context it has not registered yet, so
- * the card node is announced only after dmdrvi_path_ready() reported the
- * host node (see dmsdio_card_host_ready()).
- */
 static void notify(struct dmdrvi_context* ctx, bool available)
 {
     dmdrvi_dev_num_t num;
@@ -36,23 +38,34 @@ static void notify(struct dmdrvi_context* ctx, bool available)
     num.major = ctx->config.major;
     num.minor = DMSDIO_CARD_MINOR;
 
-    if (available && ctx->host_ready && !ctx->card_announced)
+    if (available)
     {
         dmdrvi_device_available(ctx, &num);
-        ctx->card_announced = true;
     }
-    else if (!available && ctx->card_announced)
+    else
     {
         dmdrvi_device_unavailable(ctx, &num);
-        ctx->card_announced = false;
     }
+    ctx->card_announced = available;
 }
 
-void dmsdio_card_host_ready(struct dmdrvi_context* ctx)
+/*
+ * Make the announced card node match the attached card: withdraw a node
+ * announced for a card that is gone (or was swapped for another one), then
+ * announce the attached card. dmdevfs drops hot-plug notices for a context
+ * it has not registered yet, so nothing is announced before
+ * dmdrvi_path_ready() reported the host node.
+ */
+static void sync_announcement(struct dmdrvi_context* ctx)
 {
-    ctx->host_ready = true;
-    if (dmsdio_card_attached(ctx))
+    bool attached = dmsdio_card_attached(ctx);
+    if (ctx->card_announced && (!attached || ctx->announced_generation != ctx->card.generation))
     {
+        notify(ctx, false);
+    }
+    if (attached && !ctx->card_announced && ctx->host_ready)
+    {
+        ctx->announced_generation = ctx->card.generation;
         notify(ctx, true);
     }
 }
@@ -96,7 +109,6 @@ static int attach(struct dmdrvi_context* ctx)
                   (unsigned)ctx->config.major, type_name(card.type),
                   (unsigned long)card.block_count, (unsigned)card.bus_width,
                   (unsigned)card.clock_hz, card.high_speed ? " (High Speed)" : "");
-    notify(ctx, true);
     return 0;
 }
 
@@ -110,7 +122,6 @@ void dmsdio_card_detach(struct dmdrvi_context* ctx)
     ctx->generation++;
     dmsdio_port_set_power(ctx->config.instance, false);
     DMOD_LOG_INFO("dmsdio%u: card removed\n", (unsigned)ctx->config.major);
-    notify(ctx, false);
 }
 
 int dmsdio_card_lost(struct dmdrvi_context* ctx, int error)
@@ -137,17 +148,14 @@ static int verify(struct dmdrvi_context* ctx)
     return 0;
 }
 
-int dmsdio_card_scan(struct dmdrvi_context* ctx)
+/* Settle the card state: detach, verify (CMD13) or identify. */
+static int settle(struct dmdrvi_context* ctx)
 {
-    /* Card detect is sampled again below - this scan settles any removal
-     * flagged through dmsdio_ioctl_cmd_check_removal. */
-    ctx->removal_pending = false;
     bool present = true;
     int cd = dmsdio_detect_read_cd(ctx, &present);
     if (cd == 0 && !present)
     {
         dmsdio_card_detach(ctx);
-        ctx->scan_count++;
         return -ENODEV;
     }
 
@@ -158,6 +166,17 @@ int dmsdio_card_scan(struct dmdrvi_context* ctx)
         /* Card detect says present but the old card vanished: a new one? */
         ret = attach(ctx);
     }
+    return ret;
+}
+
+/* DMDRVI_IOCTL_MONITOR_REFRESH - the only place the card node is announced or withdrawn. */
+int dmsdio_card_scan(struct dmdrvi_context* ctx)
+{
+    /* Card detect is sampled again in settle() - this scan settles any
+     * removal flagged through DMDRVI_IOCTL_MONITOR_EVENT. */
+    ctx->removal_pending = false;
+    int ret = settle(ctx);
+    sync_announcement(ctx);
     ctx->scan_count++;
     return ret;
 }

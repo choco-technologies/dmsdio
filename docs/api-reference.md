@@ -9,22 +9,25 @@ primitives (see [port-implementation.md](port-implementation.md)).
 
 | Node | dmdrvi numbering | Lifetime | Purpose |
 |------|------------------|----------|---------|
-| `/dev/dmsdioN` | `DMDRVI_NUM_MAJOR`, major = N | Persistent, created by `dmdrvi_create()` | Host status and control ioctls |
-| `/dev/dmsdioN/0` | `DMDRVI_NUM_MAJOR \| DMDRVI_NUM_MINOR`, minor 0 | Announced with `dmdrvi_device_available()` once a card is identified *and* dmdevfs has reported the host node through `dmdrvi_path_ready()`; withdrawn with `dmdrvi_device_unavailable()` when the card goes away | 64-bit byte-addressed block device |
+| `/dev/dmsdioN` | `DMDRVI_NUM_MAJOR`, major = N | Persistent, created by `dmdrvi_create()` | Host status and monitor ioctls |
+| `/dev/dmsdioN/0` | `DMDRVI_NUM_MAJOR \| DMDRVI_NUM_MINOR`, minor 0 | Announced with `dmdrvi_device_available()` by `DMDRVI_IOCTL_MONITOR_REFRESH` once a card is identified *and* dmdevfs has reported the host node through `dmdrvi_path_ready()`; withdrawn with `dmdrvi_device_unavailable()` by the `REFRESH` that finds the card gone | 64-bit byte-addressed block device |
 
 `N` defaults to `instance - 1` (SDMMC1 → `/dev/dmsdio0`), see
 [configuration.md](configuration.md).
 
-A card present at boot is identified inside `dmdrvi_create()`. The card
-node is only announced after `dmdrvi_path_ready()` for the host node because
-dmdevfs ignores hot-plug notices for a context it has not registered yet.
-The driver starts no threads: later insertions and removals are driven by
-the dmsdiod service through the host node ioctls below (see
-[configuration.md](configuration.md#presence-monitoring-dmsdiod)).
+The driver starts no threads and does not touch the card in
+`dmdrvi_create()`. Presence is driven through the dmdrvi monitor contract on
+the host node (see [Monitor commands](#monitor-commands) and
+[configuration.md](configuration.md#presence-monitoring)): dmdevfs reports
+the host node - which answers `DMDRVI_IOCTL_MONITOR_GET_POLICY` - as a
+`monitor` device, and the monitor service it starts (dmdevmon) calls
+`REFRESH` right away, which identifies a card already in the slot. The card
+node answers `DMDRVI_IOCTL_BLOCK_GET_INFO`, so dmdevfs reports it as a
+`block` device. The driver itself never talks to libsystemd.
 
-`dmdrvi_path_ready()` for the host node also reports it to libsystemd:
-`libsystemd_notify_device_added("sdio", "dmsdio<N>", "/dev/dmsdio<N>")`;
-`dmdrvi_free()` reports `libsystemd_notify_device_removed("sdio", "dmsdio<N>")`.
+The card node is only announced after `dmdrvi_path_ready()` for the host
+node, because dmdevfs ignores hot-plug notices for a context it has not
+registered yet.
 
 ## Card node (`/dev/dmsdioN/0`)
 
@@ -77,11 +80,23 @@ Data transfers return `-ENOTSUP`; `stat` reports size 0.
 |---------|-------|--------|
 | `dmsdio_ioctl_cmd_get_host_info` | `dmsdio_host_info_t*` | `card_attached`, `generation`, `scan_count`, `last_error`, `retry_count` |
 | `dmsdio_ioctl_cmd_get_card_info` | `dmsdio_card_info_t*` | Card snapshot, `-ENODEV` without a card |
-| `dmsdio_ioctl_cmd_rescan` | `NULL` | Synchronously re-checks presence: samples card detect, verifies an attached card (CMD13) or identifies a new one. `0` when a card is attached afterwards, `-ENODEV` when the slot is empty |
-| `dmsdio_ioctl_cmd_get_detect_config` | `dmsdio_detect_config_t*` | `card_detect_handler` (`""` = none), `debounce_ms`, `poll_interval_ms` from the ini section |
-| `dmsdio_ioctl_cmd_check_removal` | `NULL` | Samples card detect **without taking the driver lock**. When the slot is empty, a transfer in progress is abandoned with `-ENODEV` and the next rescan detaches the card. `0` card present, `-ENODEV` slot empty, `-ENOENT` no card detect pin, `-EIO` pin unreadable |
 
-The last three return `-ENOTSUP` on the card node.
+### Monitor commands
+
+The dmdrvi 2.1 monitor contract, answered on the host node only - on the
+card node they return `-ENOTTY`, so dmdevfs does not report the card node
+as monitored.
+
+| Command | `arg` | Result |
+|---------|-------|--------|
+| `DMDRVI_IOCTL_MONITOR_GET_POLICY` | `dmdrvi_monitor_policy_t*` | `event_handler` (`monitor_event_handler`, `""` = none), `settle_ms` (`monitor_settle_ms`), `poll_interval_ms` from the ini section |
+| `DMDRVI_IOCTL_MONITOR_EVENT` | `NULL` | Samples card detect **without taking the driver lock**. When the slot is empty, a transfer in progress is abandoned with `-ENODEV`; the next `REFRESH` detaches the card. Never announces or withdraws nodes. `0` (also without a card detect pin), `-EIO` pin unreadable |
+| `DMDRVI_IOCTL_MONITOR_REFRESH` | `NULL` | Under the driver lock: samples card detect, verifies an attached card (CMD13) or identifies a new one, then announces or withdraws the card node to match. The only place the node is announced or withdrawn. `0` when a card is attached afterwards, `-ENODEV` when the slot is empty, another negative errno when identification failed |
+
+A transfer that finds the card gone (it stops answering, or `EVENT` flagged
+the slot empty) detaches it at once: handles go stale and I/O fails with
+`-ENODEV`. The node itself is withdrawn by the next `REFRESH` - after the
+card detect edge's settle time, or at the next poll.
 
 ## Card generation and stale handles
 
@@ -103,7 +118,7 @@ Close the old handle and open the card node again after a new
 | `-ETIMEDOUT` | Command, data or busy timeout (with `retries=0`) |
 | `-EIO` | A transient error (CRC, timeout, FIFO/DMA fault) persisted through all `retries` extra attempts, or a card-internal error (ECC, CC_ERROR, ...) |
 | `-EPROTO` | Malformed response: wrong command index, bad CMD8 echo, inconsistent registers, illegal command. Never retried |
-| `-ENODEV` | No card, or the card disappeared (also during a transfer). The card node is withdrawn |
+| `-ENODEV` | No card, or the card disappeared (also during a transfer). The next `REFRESH` withdraws the card node |
 | `-ESTALE` | Handle belongs to a card generation that is no longer attached |
 | `-EROFS` | Card is write protected |
 | `-EINVAL` | Invalid argument or range (negative offset, misaligned erase range, card reported OUT_OF_RANGE/ADDRESS_ERROR) |
@@ -129,8 +144,6 @@ Declared in `include/dmsdio_types.h`:
   `write_protected`, `bus_width`, `clock_hz`
 * `dmsdio_host_info_t` - `instance`, `card_attached`, `generation`,
   `scan_count`, `last_error`, `retry_count`
-* `dmsdio_detect_config_t` - `card_detect_handler[DMSDIO_HANDLER_NAME_MAX]`,
-  `debounce_ms`, `poll_interval_ms`
 * `dmsdio_cid_t`, `dmsdio_csd_t`, `dmsdio_scr_t`, `dmsdio_ssr_t` - decoded registers
 
 ## Functions (Built-in API)

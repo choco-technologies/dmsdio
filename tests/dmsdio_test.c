@@ -16,7 +16,8 @@
  * driver is used exactly the way dmdevfs uses it: its dmdrvi DIF functions
  * are looked up at runtime by module name, and this test module implements
  * the dmdrvi MAL (dmdrvi_device_available/_unavailable) in place of dmdevfs
- * to observe hot-plug notifications.
+ * to observe hot-plug notifications, and calls the monitor ioctls itself in
+ * place of dmdevmon.
  */
 
 #define HOST            1
@@ -160,14 +161,21 @@ static void start_driver(const char* extra)
         return;
     }
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
-    /* What dmdevfs does once the host node is registered and mounted. */
+    /* What dmdevfs does once the host node is registered and mounted... */
     g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio0");
+    /* ...and what dmdevmon does first when dmdevfs reported it. */
+    g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_MONITOR_REFRESH, NULL);
     open_card();
 }
 
-static int rescan(void)
+static int refresh(void)
 {
-    return g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_rescan, NULL);
+    return g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_MONITOR_REFRESH, NULL);
+}
+
+static int monitor_event(void)
+{
+    return g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_MONITOR_EVENT, NULL);
 }
 
 /* Swap the inserted card for a fresh one of another type. */
@@ -279,15 +287,17 @@ DMOD_TEST_STEP(dmsdio_card_node_waits_for_host_registration)
     g_ctx = g_drv.create(ini, &g_host_num);
     dmini_destroy(ini);
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
-    /* identified synchronously in create, but dmdevfs has not registered the host node yet */
+    /* identified, but dmdevfs has not registered the host node yet */
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
     DMOD_TEST_EXPECT_EQ(g_available, 0);
     dmdrvi_dev_num_t num = card_num();
     g_drv.path_ready(g_ctx, &num, "/dev/dmsdio0/0");        /* card node: ignored */
-    DMOD_TEST_EXPECT_EQ(g_available, 0);
     g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio0");
+    DMOD_TEST_EXPECT_EQ(g_available, 0);                    /* only REFRESH announces */
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_EQ(g_available, 1);
-    g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio0");
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_EQ(g_available, 1);                    /* announced once */
 }
 
@@ -297,7 +307,7 @@ DMOD_TEST_STEP(dmsdio_identification_retries_transient_errors)
     start_driver(NULL);
     dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdhc);
     dmsdio_port_mock_inject_fault(HOST, dmsdio_mock_fault_cmd_crc, 2, 1);   /* CMD2 */
-    DMOD_TEST_EXPECT_EQ(rescan(), 0);
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_EQ(stats(false).faults_injected, 1u);
     DMOD_TEST_EXPECT_EQ(card_info().type, dmsdio_card_type_sdhc);
 }
@@ -408,7 +418,7 @@ DMOD_TEST_STEP(dmsdio_no_card_is_reported)
     DMOD_TEST_EXPECT_NOT_NULL(g_ctx);
     DMOD_TEST_EXPECT_NULL(g_card);
     DMOD_TEST_EXPECT_FALSE(host_info().card_attached);
-    DMOD_TEST_EXPECT_EQ(rescan(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(refresh(), -ENODEV);
     DMOD_TEST_EXPECT_EQ(g_drv.stat(g_ctx, "/dev/dmsdio0/0", &st), -ENODEV);
     DMOD_TEST_EXPECT_EQ(g_available, 0);
     DMOD_TEST_EXPECT_EQ(host_info().last_error, 0);     /* an empty slot is not an error */
@@ -421,9 +431,9 @@ DMOD_TEST_STEP(dmsdio_malformed_identification_response_is_eproto)
     start_driver(NULL);
     dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdhc);
     dmsdio_port_mock_inject_fault(HOST, dmsdio_mock_fault_bad_index, 8, 1);
-    DMOD_TEST_EXPECT_EQ(rescan(), -EPROTO);
+    DMOD_TEST_EXPECT_EQ(refresh(), -EPROTO);
     DMOD_TEST_EXPECT_EQ(host_info().last_error, -EPROTO);
-    DMOD_TEST_EXPECT_EQ(rescan(), 0);
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
 }
 
 DMOD_TEST_STEP(dmsdio_reads_active_board_section)
@@ -439,6 +449,7 @@ DMOD_TEST_STEP(dmsdio_reads_active_board_section)
     DMOD_TEST_EXPECT_EQ(g_host_num.major, 3);
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
     g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio3");
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_EQ(host_info().instance, 1);
     DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
     DMOD_TEST_EXPECT_EQ(g_announced.major, 3);
@@ -460,7 +471,7 @@ DMOD_TEST_STEP(dmsdio_rejects_invalid_configuration)
 
     ini = dmini_create();
     dmini_parse_string(ini, "[dmsdio]\ninstance=1\n"
-                            "card_detect_handler=a_handler_name_longer_than_31_chars\n");
+                            "monitor_event_handler=a_handler_name_longer_than_31_chars\n");
     DMOD_TEST_EXPECT_NULL(g_drv.create(ini, &num));
     dmini_destroy(ini);
 }
@@ -555,7 +566,7 @@ DMOD_TEST_STEP(dmsdio_argument_validation)
     DMOD_TEST_EXPECT_EQ(g_drv.read(g_ctx, g_card, g_buf, 0, 0), 0);
     DMOD_TEST_EXPECT_EQ(g_drv.write(g_ctx, ro, g_buf, BLK, 0), -EBADF);
     DMOD_TEST_EXPECT_EQ(g_drv.read(g_ctx, g_host, g_buf, BLK, 0), -ENOTSUP);
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, dmsdio_ioctl_cmd_rescan, NULL), -ENOTSUP);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, DMDRVI_IOCTL_MONITOR_REFRESH, NULL), -ENOTTY);
     DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_BLOCK_GET_INFO, g_buf), -ENOTTY);
     g_drv.close(g_ctx, ro);
 }
@@ -653,22 +664,41 @@ DMOD_TEST_STEP(dmsdio_removal_during_transfer)
     void* old = g_card;
     dmsdio_port_mock_remove_after_blocks(HOST, 2);
     DMOD_TEST_EXPECT_EQ(card_read(g_buf, 8 * BLK, 0), -ENODEV);
-    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
     DMOD_TEST_EXPECT_FALSE(host_info().card_attached);
     DMOD_TEST_EXPECT_EQ(host_info().last_error, -ENODEV);
     DMOD_TEST_EXPECT_EQ(card_read(g_buf, BLK, 0), -ENODEV);
     DMOD_TEST_EXPECT_EQ(g_drv.flush(g_ctx, old), -ENODEV);
     dmdrvi_dev_num_t num = card_num();
     DMOD_TEST_EXPECT_NULL(g_drv.open(g_ctx, DMDRVI_O_RDWR, &num));
+    /* The node is withdrawn by the next REFRESH, not by the failing transfer. */
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 0);
+    DMOD_TEST_EXPECT_EQ(refresh(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
+    DMOD_TEST_EXPECT_EQ(refresh(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
+}
+
+DMOD_TEST_STEP(dmsdio_card_swapped_after_removal_during_transfer)
+{
+    /* Pulled mid-transfer, another card in before the monitor refreshes:
+     * the old node is withdrawn before the new card is announced. */
+    dmsdio_port_mock_remove_after_blocks(HOST, 1);
+    DMOD_TEST_EXPECT_EQ(card_read(g_buf, 4 * BLK, 0), -ENODEV);
+    dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdxc);
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
+    DMOD_TEST_EXPECT_EQ(g_available, 2);
+    DMOD_TEST_EXPECT_EQ(card_info().type, dmsdio_card_type_sdxc);
+    DMOD_TEST_EXPECT_EQ(card_read(g_buf, BLK, 0), -ESTALE);
 }
 
 DMOD_TEST_STEP(dmsdio_stale_handle_after_card_swap)
 {
     uint32_t generation = host_info().generation;
     dmsdio_port_mock_remove(HOST);
-    DMOD_TEST_EXPECT_EQ(rescan(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(refresh(), -ENODEV);
     dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdxc);
-    DMOD_TEST_EXPECT_EQ(rescan(), 0);
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
     DMOD_TEST_EXPECT_EQ(g_available, 2);
     DMOD_TEST_EXPECT_EQ(host_info().generation, generation + 2u);
@@ -680,72 +710,92 @@ DMOD_TEST_STEP(dmsdio_stale_handle_after_card_swap)
     DMOD_TEST_EXPECT_EQ(card_read(g_buf, BLK, 0), (dmdrvi_ssize_t)BLK);
 }
 
-DMOD_TEST_STEP(dmsdio_rescan_keeps_present_card)
+DMOD_TEST_STEP(dmsdio_refresh_keeps_present_card)
 {
     uint32_t generation = host_info().generation;
-    DMOD_TEST_EXPECT_EQ(rescan(), 0);
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_EQ(host_info().generation, generation);
     DMOD_TEST_EXPECT_EQ(g_available, 1);
     DMOD_TEST_EXPECT_EQ(card_read(g_buf, BLK, 0), (dmdrvi_ssize_t)BLK);
 }
 
 /* ======================================================================
- *  Presence monitoring hooks (used by the dmsdiod service)
+ *  dmdrvi monitor contract (driven by dmdevmon)
  * ====================================================================== */
 
-DMOD_TEST_STEP(dmsdio_card_present_at_boot_is_identified_in_create)
+DMOD_TEST_STEP(dmsdio_create_leaves_the_card_to_the_monitor)
 {
-    /* No thread, no service: the card is attached when create returns. */
+    /* No thread, no service, no bus traffic: the first REFRESH identifies. */
+    stop_driver();
+    g_available = 0;
+    dmini_context_t ini = dmini_create();
+    dmini_parse_string(ini, "[dmsdio]\ninstance=1\n");
+    g_ctx = g_drv.create(ini, &g_host_num);
+    dmini_destroy(ini);
+    g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
+    DMOD_TEST_EXPECT_FALSE(host_info().card_attached);
+    DMOD_TEST_EXPECT_EQ(host_info().scan_count, 0u);
+    g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio0");
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
+    DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
+    DMOD_TEST_EXPECT_EQ(g_available, 1);
+    Dmod_ThreadSleep(50);
+    DMOD_TEST_EXPECT_EQ(host_info().scan_count, 1u);   /* nothing polls behind our back */
+}
+
+DMOD_TEST_STEP(dmsdio_monitor_policy_is_handed_out)
+{
+    use_card(dmsdio_card_type_sdhc, "monitor_event_handler=sd0_card_detect\n"
+                                    "monitor_settle_ms=20\npoll_interval_ms=250\n");
+    dmdrvi_monitor_policy_t policy;
+    memset(&policy, 0xFF, sizeof(policy));
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_MONITOR_GET_POLICY, &policy), 0);
+    DMOD_TEST_EXPECT_EQ(strcmp(policy.event_handler, "sd0_card_detect"), 0);
+    DMOD_TEST_EXPECT_EQ(policy.settle_ms, 20u);
+    DMOD_TEST_EXPECT_EQ(policy.poll_interval_ms, 250u);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_MONITOR_GET_POLICY, NULL), -EINVAL);
+
+    /* Defaults: no event handler, 50 ms settle time, polling every second. */
     stop_driver();
     dmini_context_t ini = dmini_create();
     dmini_parse_string(ini, "[dmsdio]\ninstance=1\n");
     g_ctx = g_drv.create(ini, &g_host_num);
     dmini_destroy(ini);
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
-    DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
-    DMOD_TEST_EXPECT_EQ(host_info().scan_count, 1u);
-    Dmod_ThreadSleep(50);
-    DMOD_TEST_EXPECT_EQ(host_info().scan_count, 1u);   /* nothing polls behind our back */
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, DMDRVI_IOCTL_MONITOR_GET_POLICY, &policy), 0);
+    DMOD_TEST_EXPECT_EQ(policy.event_handler[0], '\0');
+    DMOD_TEST_EXPECT_EQ(policy.settle_ms, 50u);
+    DMOD_TEST_EXPECT_EQ(policy.poll_interval_ms, 1000u);
 }
 
-DMOD_TEST_STEP(dmsdio_detect_config_is_handed_out)
+DMOD_TEST_STEP(dmsdio_card_node_is_not_monitored)
 {
-    use_card(dmsdio_card_type_sdhc, "card_detect_handler=sd0_card_detect\n"
-                                    "card_detect_debounce_ms=20\npoll_interval_ms=250\n");
-    dmsdio_detect_config_t config;
-    memset(&config, 0xFF, sizeof(config));
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_get_detect_config, &config), 0);
-    DMOD_TEST_EXPECT_EQ(strcmp(config.card_detect_handler, "sd0_card_detect"), 0);
-    DMOD_TEST_EXPECT_EQ(config.debounce_ms, 20u);
-    DMOD_TEST_EXPECT_EQ(config.poll_interval_ms, 250u);
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, dmsdio_ioctl_cmd_get_detect_config, &config), -ENOTSUP);
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_get_detect_config, NULL), -EINVAL);
-
-    use_card(dmsdio_card_type_sdhc, "poll_interval_ms=0\n");
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_get_detect_config, &config), 0);
-    DMOD_TEST_EXPECT_EQ(config.card_detect_handler[0], '\0');
-    DMOD_TEST_EXPECT_EQ(config.poll_interval_ms, 0u);
+    /* dmdevfs reports only the host node as a "monitor" device. */
+    dmdrvi_monitor_policy_t policy;
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, DMDRVI_IOCTL_MONITOR_GET_POLICY, &policy), -ENOTTY);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, DMDRVI_IOCTL_MONITOR_EVENT, NULL), -ENOTTY);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, DMDRVI_IOCTL_MONITOR_REFRESH, NULL), -ENOTTY);
 }
 
-DMOD_TEST_STEP(dmsdio_check_removal_without_card_detect_pin)
+DMOD_TEST_STEP(dmsdio_event_without_card_detect_pin)
 {
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_check_removal, NULL), -ENOENT);
-    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, dmsdio_ioctl_cmd_check_removal, NULL), -ENOTSUP);
-    /* Nothing flagged: the card keeps working. */
+    /* Nothing to sample - the event leaves everything to REFRESH. */
+    DMOD_TEST_EXPECT_EQ(monitor_event(), 0);
     DMOD_TEST_EXPECT_EQ(card_read(g_buf, BLK, 0), (dmdrvi_ssize_t)BLK);
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 0);
 }
 
-DMOD_TEST_STEP(dmsdio_rescan_follows_removal_and_insertion)
+DMOD_TEST_STEP(dmsdio_refresh_follows_removal_and_insertion)
 {
-    /* What dmsdiod does on every poll interval without a card detect pin. */
+    /* What dmdevmon does on every poll interval without a card detect pin. */
     dmsdio_port_mock_remove(HOST);
-    DMOD_TEST_EXPECT_EQ(rescan(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(refresh(), -ENODEV);
     DMOD_TEST_EXPECT_FALSE(host_info().card_attached);
     DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
-    DMOD_TEST_EXPECT_EQ(rescan(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(refresh(), -ENODEV);
     DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
     dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdxc);
-    DMOD_TEST_EXPECT_EQ(rescan(), 0);
+    DMOD_TEST_EXPECT_EQ(refresh(), 0);
     DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
     DMOD_TEST_EXPECT_EQ(g_available, 2);
     DMOD_TEST_EXPECT_EQ(card_info().type, dmsdio_card_type_sdxc);

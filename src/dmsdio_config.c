@@ -9,7 +9,7 @@
 #define DEFAULT_WRITE_TIMEOUT_MS    500
 #define DEFAULT_ERASE_TIMEOUT_MS    3000
 #define DEFAULT_MAX_BLOCKS          128
-#define DEFAULT_DEBOUNCE_MS         50
+#define DEFAULT_SETTLE_MS           50
 #define DEFAULT_POLL_INTERVAL_MS    1000
 #define MAX_RETRIES                 16
 
@@ -71,8 +71,6 @@ static int read_timeouts(dmini_context_t ini, const char* section, dmsdio_config
     c->read_timeout_ms  = read_u32(ini, section, "read_timeout_ms", DEFAULT_READ_TIMEOUT_MS);
     c->write_timeout_ms = read_u32(ini, section, "write_timeout_ms", DEFAULT_WRITE_TIMEOUT_MS);
     c->erase_timeout_ms = read_u32(ini, section, "erase_timeout_ms", DEFAULT_ERASE_TIMEOUT_MS);
-    c->detect.debounce_ms      = read_u32(ini, section, "card_detect_debounce_ms", DEFAULT_DEBOUNCE_MS);
-    c->detect.poll_interval_ms = read_u32(ini, section, "poll_interval_ms", DEFAULT_POLL_INTERVAL_MS);
 
     if (c->retries > MAX_RETRIES || c->init_timeout_ms == 0 || c->read_timeout_ms == 0 ||
         c->write_timeout_ms == 0 || c->erase_timeout_ms == 0)
@@ -113,21 +111,30 @@ static int read_bus(dmini_context_t ini, const char* section, dmsdio_config_t* c
 
 static int read_card_detect(dmini_context_t ini, const char* section, dmsdio_config_t* c)
 {
-    const char* level   = dmini_get_string(ini, section, "card_detect_active_level", "low");
-    const char* handler = dmini_get_string(ini, section, "card_detect_handler", NULL);
-
+    const char* level = dmini_get_string(ini, section, "card_detect_active_level", "low");
     if (strcmp(level, "low") != 0 && strcmp(level, "high") != 0)
     {
         DMOD_LOG_ERROR("dmsdio: card_detect_active_level must be low or high\n");
         return -EINVAL;
     }
     c->cd_active_high = strcmp(level, "high") == 0;
-    int length = Dmod_SnPrintf(c->detect.card_detect_handler, sizeof(c->detect.card_detect_handler),
+    return 0;
+}
+
+/* The dmdrvi monitor policy, under the key names dmdrvi recommends. */
+static int read_monitor(dmini_context_t ini, const char* section, dmsdio_config_t* c)
+{
+    const char* handler = dmini_get_string(ini, section, "monitor_event_handler", NULL);
+    dmdrvi_monitor_policy_t* policy = &c->monitor;
+
+    policy->settle_ms        = read_u32(ini, section, "monitor_settle_ms", DEFAULT_SETTLE_MS);
+    policy->poll_interval_ms = read_u32(ini, section, "poll_interval_ms", DEFAULT_POLL_INTERVAL_MS);
+    int length = Dmod_SnPrintf(policy->event_handler, sizeof(policy->event_handler),
                                "%s", (handler != NULL) ? handler : "");
-    if (length < 0 || (size_t)length >= sizeof(c->detect.card_detect_handler))
+    if (length < 0 || (size_t)length >= sizeof(policy->event_handler))
     {
-        DMOD_LOG_ERROR("dmsdio: card_detect_handler longer than %u characters\n",
-                       (unsigned)(DMSDIO_HANDLER_NAME_MAX - 1u));
+        DMOD_LOG_ERROR("dmsdio: monitor_event_handler longer than %u characters\n",
+                       (unsigned)(DMDRVI_MONITOR_HANDLER_NAME_MAX - 1u));
         return -EINVAL;
     }
     return 0;
@@ -146,6 +153,10 @@ int dmsdio_config_read(dmini_context_t ini, dmsdio_config_t* config)
     if (ret == 0)
     {
         ret = read_card_detect(ini, section, config);
+    }
+    if (ret == 0)
+    {
+        ret = read_monitor(ini, section, config);
     }
     return ret;
 }

@@ -11,8 +11,9 @@ instance=1
 bus_width=4
 max_clock_hz=50000000
 high_speed=true
-card_detect_handler=sd_card_detect
 card_detect_active_level=low
+monitor_event_handler=sd_card_detect
+poll_interval_ms=0
 ```
 
 | Key | Default | Description |
@@ -29,20 +30,20 @@ card_detect_active_level=low
 | `erase_timeout_ms` | `3000` | Minimum erase busy limit per 4 MiB chunk (raised from SD Status `ERASE_TIMEOUT` when larger) |
 | `max_blocks_per_transfer` | `128` | Split larger requests into several multi-block commands |
 | `card_detect_active_level` | `low` | Card detect level meaning "card inserted" (`low` or `high`) |
-| `card_detect_handler` | none | dmhaman handler name the card-detect GPIO's `interrupt_handler` points to (at most 31 characters). Used by dmsdiod |
-| `card_detect_debounce_ms` | `50` | Settle time for card detect edges. Used by dmsdiod |
-| `poll_interval_ms` | `1000` | Periodic presence re-check by dmsdiod; `0` disables it |
+| `monitor_event_handler` | none | dmhaman handler name the card-detect GPIO's `interrupt_handler` points to (at most 31 characters) |
+| `monitor_settle_ms` | `50` | Quiet time after the last card detect edge before the card is re-checked |
+| `poll_interval_ms` | `1000` | Periodic presence re-check; `0` disables it |
 
-The last three keys are presence monitoring policy: the driver does not act
-on them itself, it hands them to the dmsdiod service through
-`dmsdio_ioctl_cmd_get_detect_config` (see below).
+The last three keys are the dmdrvi monitor policy, under the names dmdrvi
+prescribes for every driver: dmsdio does not act on them itself, it hands
+them out through `DMDRVI_IOCTL_MONITOR_GET_POLICY` (see below).
 
 ## Card detect
 
 Card detect is optional. It is a dmgpio device in the same `friends_group`
 as the dmsdio device, with `friend_role=card_detect`, interrupts on both
 edges and its `interrupt_handler` set to the name used for
-`card_detect_handler`. For example (board file with one section per
+`monitor_event_handler`. For example (board file with one section per
 device):
 
 ```ini
@@ -51,8 +52,9 @@ driver_name=dmsdio
 friends_group=sd0
 instance=1
 bus_width=4
-card_detect_handler=sd0_card_detect
 card_detect_active_level=low
+monitor_event_handler=sd0_card_detect
+poll_interval_ms=0
 
 [sd_card_detect]
 driver_name=dmgpio
@@ -73,35 +75,33 @@ STM32F407G-DISC1.
 dmdevfs reports the GPIO node to dmsdio through `dmdrvi_friend_changed()`;
 the driver samples it on every scan.
 
-## Presence monitoring (dmsdiod)
+## Presence monitoring
 
-The driver starts no threads. A card present at boot is identified inside
-`dmdrvi_create()`; everything that happens over time - card detect edges,
-debouncing, periodic re-checks - is done by the **dmsdiod** service
-([`services/dmsdiod`](../services/dmsdiod/README.md)), one instance per host:
+The driver starts no threads and does not touch the card in
+`dmdrvi_create()`. Everything that happens over time is driven through the
+dmdrvi monitor contract on the host node by dmdevfs' generic
+[dmdevmon](https://github.com/choco-technologies/dmdevfs/blob/main/services/dmdevmon/README.md) service, one instance per host:
 
-1. dmsdio reports its host node from `dmdrvi_path_ready()` with
-   `libsystemd_notify_device_added("sdio", "dmsdio<major>", "/dev/dmsdio<major>")`
-   (and `libsystemd_notify_device_removed()` from `dmdrvi_free()`).
-2. The `[class=sdio]` rule from `dmsdiod.rules` starts `dmsdiod@dmsdio<major>`
-   from the `dmsdiod@.ini` template, with the node path as its argument.
-3. dmsdiod reads `card_detect_handler`, `card_detect_debounce_ms` and
-   `poll_interval_ms` through `dmsdio_ioctl_cmd_get_detect_config` and
-   registers the dmhaman handler. The handler (interrupt context) only posts
-   a semaphore.
-4. On an edge dmsdiod calls `dmsdio_ioctl_cmd_check_removal` - lock-free, so
-   a transfer running on a removed card is aborted with `-ENODEV` at once -
-   waits until the pin has been quiet for a whole debounce window, then
-   calls `dmsdio_ioctl_cmd_rescan`, which identifies, verifies (CMD13) or
-   detaches the card under the driver lock.
-5. Without a card detect pin, `dmsdio_ioctl_cmd_rescan` runs every
-   `poll_interval_ms`. With neither, dmsdiod rescans once and exits.
+1. dmdevfs reports the host node `/dev/dmsdio<major>`, which answers
+   `DMDRVI_IOCTL_MONITOR_GET_POLICY`, to libsystemd as a `monitor` device
+   named `dmsdio<major>`.
+2. The `[class=monitor]` rule from `dmdevmon.rules` starts
+   `dmdevmon@dmsdio<major>` from the `dmdevmon@.ini` template, with the node
+   path as its argument.
+3. dmdevmon reads the policy (`monitor_event_handler`, `monitor_settle_ms`,
+   `poll_interval_ms`), registers the dmhaman handler - it runs in interrupt
+   context and only wakes dmdevmon - and calls `DMDRVI_IOCTL_MONITOR_REFRESH`
+   once, which identifies a card already in the slot.
+4. On an edge dmdevmon calls `DMDRVI_IOCTL_MONITOR_EVENT` - lock-free, so a
+   transfer running on a removed card is aborted with `-ENODEV` at once -
+   and, once the pin has been quiet for `monitor_settle_ms`, `REFRESH`,
+   which identifies, verifies (CMD13) or detaches the card under the driver
+   lock and announces or withdraws `/dev/dmsdio<major>/0`.
+5. Without a card detect pin, `REFRESH` runs every `poll_interval_ms`. With
+   neither, dmdevmon refreshes once and exits.
 
-Install `dmsdiod.rules` into libsystemd's rules directory and
-`dmsdiod@.ini` into its units directory (both ship in the dmsdiod package
-under `configs/`). Without dmsdiod the card present at boot still works;
-insertions and removals are then only noticed through a transfer error or a
-manual `dmsdio_ioctl_cmd_rescan`.
+Install `dmdevmon.rules` into libsystemd's rules directory and
+`dmdevmon@.ini` into its units directory (both ship in the dmdevmon package
+under `configs/`). Without a monitor no card is ever identified.
 
-Use a distinct `card_detect_handler` name per host: dmsdiod registers it with
-dmhaman and unregisters it when the unit is stopped.
+Use a distinct `monitor_event_handler` name per host.

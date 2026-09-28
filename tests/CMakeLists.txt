@@ -21,9 +21,8 @@ target_include_directories(${DMOD_MODULE_NAME} PRIVATE
 target_link_libraries(${DMOD_MODULE_NAME} dmsdio_if dmsdio_port_if)
 
 dmod_link_modules(${DMOD_MODULE_NAME}
-    dmdrvi
+    dmdrvi@>=2.1
     dmini
-    libsystemd
 )
 
 # Register the test module with ctest - this replays the same two steps CI

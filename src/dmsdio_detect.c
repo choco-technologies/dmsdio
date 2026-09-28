@@ -4,10 +4,11 @@
  * Card detect pin.
  *
  * Card detect is an optional dmgpio friend (friend_role=card_detect in the
- * same friend_group). The driver only samples it - during a scan and for
- * dmsdio_ioctl_cmd_check_removal. Waiting for its edges, debouncing and
- * periodic polling are the job of the dmsdiod service, which drives the
- * driver through the host node's rescan/check_removal ioctls.
+ * same friend_group). The driver only samples it - during a scan
+ * (DMDRVI_IOCTL_MONITOR_REFRESH) and for DMDRVI_IOCTL_MONITOR_EVENT.
+ * Waiting for its edges, settling and periodic polling are the job of the
+ * monitor service (dmdevfs' dmdevmon), which calls those two ioctls on the
+ * host node.
  */
 
 int dmsdio_detect_read_cd(struct dmdrvi_context* ctx, bool* present)
@@ -34,25 +35,27 @@ int dmsdio_detect_read_cd(struct dmdrvi_context* ctx, bool* present)
 }
 
 /*
+ * DMDRVI_IOCTL_MONITOR_EVENT - a card detect edge.
+ *
  * Runs without the context lock: it has to get through while a transfer
  * holds it, so that transfer bails out with -ENODEV instead of running into
- * its timeouts. Only ever raises removal_pending; the next scan (under the
- * lock) settles the card state and clears it.
+ * its timeouts. Only ever raises removal_pending; the next scan (REFRESH,
+ * under the lock) settles the card state and clears it. Without a card
+ * detect pin there is nothing to sample - the event is left to REFRESH.
  */
-int dmsdio_detect_check_removal(struct dmdrvi_context* ctx)
+int dmsdio_detect_event(struct dmdrvi_context* ctx)
 {
     bool present = true;
     int ret = dmsdio_detect_read_cd(ctx, &present);
-    if (ret != 0)
+    if (ret == -ENOENT)
     {
-        return ret;
+        return 0;
     }
-    if (!present)
+    if (ret == 0 && !present)
     {
         ctx->removal_pending = true;
-        return -ENODEV;
     }
-    return 0;
+    return ret;
 }
 
 void dmsdio_detect_set_cd_path(struct dmdrvi_context* ctx, const char* path)
