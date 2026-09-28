@@ -213,6 +213,23 @@ typedef struct
     uint32_t            retry_count;    /**< Transfers recovered by a retry */
 } dmsdio_host_info_t;
 
+/** Longest card detect handler name, including the terminator. */
+#define DMSDIO_HANDLER_NAME_MAX     32u
+
+/**
+ * @brief Presence monitoring policy of a host, see dmsdio_ioctl_cmd_get_detect_config.
+ *
+ * The driver itself never waits for card detect edges or polls: it only
+ * carries this policy from its ini section to whoever monitors presence
+ * (the dmsdiod service).
+ */
+typedef struct
+{
+    char        card_detect_handler[DMSDIO_HANDLER_NAME_MAX]; /**< dmhaman handler of the CD edge interrupt, "" = none */
+    uint32_t    debounce_ms;        /**< Settle time after a card detect edge */
+    uint32_t    poll_interval_ms;   /**< Periodic rescan interval, 0 = off */
+} dmsdio_detect_config_t;
+
 /* ======================================================================
  *  Driver-specific ioctl commands (start at DMDRVI_IOCTL_CUSTOM_BASE)
  * ====================================================================== */
@@ -228,6 +245,16 @@ typedef enum
     dmsdio_ioctl_cmd_get_card_info,
     /** arg: NULL. Synchronously re-check presence (host node only). */
     dmsdio_ioctl_cmd_rescan,
+    /** arg: dmsdio_detect_config_t* (host node only) */
+    dmsdio_ioctl_cmd_get_detect_config,
+    /**
+     * arg: NULL (host node only). Samples the card detect pin without waiting
+     * for a running transfer. When the pin reports the slot empty, a transfer
+     * in progress is abandoned with -ENODEV instead of running into timeouts;
+     * the next rescan settles the state. Returns 0 (card present), -ENODEV
+     * (slot empty), -ENOENT (no card detect pin) or -EIO (pin unreadable).
+     */
+    dmsdio_ioctl_cmd_check_removal,
 } dmsdio_ioctl_cmd_t;
 
 #endif /* DMSDIO_TYPES_H */

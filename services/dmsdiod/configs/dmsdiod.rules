@@ -1,0 +1,12 @@
+; dmsdiod.rules - libsystemd device rule.
+;
+; dmsdio reports every host node it creates (/dev/dmsdioN) under class
+; "sdio", named "dmsdioN", with the node's absolute path as the user value
+; (from its dmdrvi_path_ready DIF). Start one dmsdiod@dmsdioN instance for
+; each, instantiated on demand from dmsdiod@.ini. When the host goes away
+; (dmdrvi_free) the same rule stops it again.
+;
+; Load with libsystemd_load_rules() on the directory this file lives in -
+; see dmsystem's libsystemd docs/configuration.md ("Device rules").
+[class=sdio]
+start=dmsdiod@%name

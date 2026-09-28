@@ -8,3 +8,7 @@ $include https://github.com/choco-technologies/dmsdio/releases/download/vlatest/
 # real-world reference).
 dmsdio      https://github.com/choco-technologies/dmsdio/releases/download/v<version>/dmsdio-v<version>-<cpu_family>.zip
 dmsdio_port https://github.com/choco-technologies/dmsdio/releases/download/v<version>/dmsdio_port-v<version>-<cpu_family>.zip
+
+# dmsdiod is the presence service Application module (services/dmsdiod),
+# packaged per CPU family like the driver
+dmsdiod     https://github.com/choco-technologies/dmsdio/releases/download/v<version>/dmsdiod-v<version>-<cpu_family>.zip

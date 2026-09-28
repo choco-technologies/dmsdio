@@ -30,7 +30,7 @@ jobs:
           # That is the only reason DMOD_TOOLS_NAME is overridden by hand -
           # everywhere else the tools follow from DMOD_CPU_FAMILY.
           cmake .. -DDMOD_TOOLS_NAME=arch/x86_64
-          cmake --build . --target dmsdio test_dmsdio
+          cmake --build . --target dmsdio test_dmsdio dmsdiod
 
       - name: Build simulated-card dmsdio_port (x86_64)
         run: |
@@ -51,6 +51,7 @@ jobs:
           test -f build/dmf/dmsdio.dmf
           test -f build/dmf/dmsdio_version.txt
           test -f build/dmf/test_dmsdio.dmf
+          test -f build/dmf/dmsdiod.dmf
           test -f build/dmf/dmsdio_port.dmf
           echo "Module files present"
 
@@ -61,7 +62,7 @@ jobs:
           # dmsdio_port is the simulated card built above - it is never
           # published for x86_64, so it is not fetched here.
           dmf-get install dmini -y
-          dmf-get install dmhaman -y
+          dmf-get install libsystemd -y
           dmod_loader build/dmf/test_dmsdio.dmf
 
   discover-cpu-families:

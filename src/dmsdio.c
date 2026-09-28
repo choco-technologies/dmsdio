@@ -15,6 +15,11 @@
  *
  * All bus operations of one host are serialized by ctx->lock. Handles to the
  * card node carry the card generation they were opened for.
+ *
+ * The driver starts no threads of its own: a card present at boot is
+ * identified in dmdrvi_create(), later insertions and removals are handled
+ * by the dmsdiod service (started by libsystemd for the "sdio" device class
+ * reported from dmdrvi_path_ready()) through the host node's ioctls.
  */
 
 #define SCRATCH_ALIGNMENT   32u     /* cache line: safe for DMA cache maintenance */
@@ -45,7 +50,7 @@ static int check_card_handle(struct dmdrvi_context* ctx, const dmsdio_handle_t* 
 
 static void destroy_context(struct dmdrvi_context* ctx, bool port_ready)
 {
-    dmsdio_detect_stop(ctx);
+    dmsdio_detect_release(ctx);
     if (port_ready)
     {
         dmsdio_port_set_power(ctx->config.instance, false);
@@ -60,7 +65,6 @@ static void destroy_context(struct dmdrvi_context* ctx, bool port_ready)
         dmosi_mutex_destroy(ctx->cd_lock);
     }
     Dmod_Free(ctx->scratch);
-    dmsdio_config_release(&ctx->config);
     ctx->magic = 0;
     Dmod_Free(ctx);
 }
@@ -120,15 +124,41 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_context_t, _create,
         destroy_context(ctx, false);
         return NULL;
     }
-    if (dmsdio_detect_start(ctx) != 0)
-    {
-        destroy_context(ctx, true);
-        return NULL;
-    }
+    /* A card inserted at boot; everything later goes through dmsdiod. */
+    dmsdio_lock(ctx);
+    dmsdio_card_scan(ctx);
+    dmsdio_unlock(ctx);
+
     memset(dev_num, 0, sizeof(*dev_num));
     dev_num->flags = DMDRVI_NUM_MAJOR;
     dev_num->major = ctx->config.major;
     return ctx;
+}
+
+/*
+ * Reports the host node to libsystemd under the "sdio" device class, with
+ * its absolute path as the user value - a [class=sdio] device rule starts
+ * dmsdiod@<name> for it (see services/dmsdiod). -ENOENT only means no rule
+ * matches (yet); libsystemd remembers the device for rules loaded later.
+ */
+static void report_host(struct dmdrvi_context* ctx, bool added, const char* path)
+{
+    dmsdio_lock(ctx);
+    bool reported = ctx->host_ready;
+    dmsdio_unlock(ctx);
+    if (!added && !reported)
+    {
+        return;
+    }
+    char name[16];
+    Dmod_SnPrintf(name, sizeof(name), "dmsdio%u", (unsigned)ctx->config.major);
+    int ret = added ? libsystemd_notify_device_added(DMSDIO_LIBSYSTEMD_DEVICE_CLASS, name, path)
+                    : libsystemd_notify_device_removed(DMSDIO_LIBSYSTEMD_DEVICE_CLASS, name);
+    if (ret != 0 && ret != -ENOENT && ret != -ESRCH)
+    {
+        DMOD_LOG_WARN("dmsdio%u: libsystemd device %s notice failed (%d)\n",
+                      (unsigned)ctx->config.major, added ? "added" : "removed", ret);
+    }
 }
 
 dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _free, ( dmdrvi_context_t context ))
@@ -137,6 +167,8 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _free, ( dmdrvi_context_t con
     {
         return;
     }
+    /* Stops dmsdiod for this host before the context goes away. */
+    report_host(context, false, NULL);
     /* dmdevfs is tearing this context down itself - no unavailable notice. */
     destroy_context(context, true);
 }
@@ -156,14 +188,18 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _friend_changed,
 dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _path_ready,
     ( dmdrvi_context_t context, const dmdrvi_dev_num_t* dev_num, const char* path ))
 {
-    (void)path;
     if (!is_valid_context(context) || dev_num == NULL || (dev_num->flags & DMDRVI_NUM_MINOR) != 0)
     {
         return;     /* only the host node's registration matters */
     }
     dmsdio_lock(context);
+    bool first = !context->host_ready;
     dmsdio_card_host_ready(context);
     dmsdio_unlock(context);
+    if (first && path != NULL)
+    {
+        report_host(context, true, path);
+    }
 }
 
 /* ---- dmdrvi: handles ---- */
@@ -345,6 +381,13 @@ static int host_ioctl(struct dmdrvi_context* ctx, const dmsdio_handle_t* h, int 
         }
         case dmsdio_ioctl_cmd_rescan:
             return h->is_card ? -ENOTSUP : dmsdio_card_scan(ctx);
+        case dmsdio_ioctl_cmd_get_detect_config:
+            if (h->is_card)
+            {
+                return -ENOTSUP;
+            }
+            *(dmsdio_detect_config_t*)arg = ctx->config.detect;
+            return 0;
         default:
             return -ENOTTY;
     }
@@ -395,6 +438,11 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, int, _ioctl,
     if (!is_valid_context(context) || !is_valid_handle(h))
     {
         return -EINVAL;
+    }
+    if (command == dmsdio_ioctl_cmd_check_removal)
+    {
+        /* Deliberately lock-free, see dmsdio_detect_check_removal(). */
+        return h->is_card ? -ENOTSUP : dmsdio_detect_check_removal(context);
     }
     if (arg == NULL && command != dmsdio_ioctl_cmd_rescan)
     {

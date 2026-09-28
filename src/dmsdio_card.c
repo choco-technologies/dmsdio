@@ -139,6 +139,9 @@ static int verify(struct dmdrvi_context* ctx)
 
 int dmsdio_card_scan(struct dmdrvi_context* ctx)
 {
+    /* Card detect is sampled again below - this scan settles any removal
+     * flagged through dmsdio_ioctl_cmd_check_removal. */
+    ctx->removal_pending = false;
     bool present = true;
     int cd = dmsdio_detect_read_cd(ctx, &present);
     if (cd == 0 && !present)

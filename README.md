@@ -21,8 +21,11 @@ a 64-bit block device through dmdrvi 2.0.
 - dmdrvi device model: persistent host node `/dev/dmsdio0` plus the
   hot-plugged card node `/dev/dmsdio0/0`; handles are invalidated with a
   card generation identifier.
-- Card detect through an optional dmgpio friend; the ISR only enqueues, a
-  dmosi worker debounces and attaches/detaches the card.
+- No threads in the driver: a card present at boot is identified in
+  `dmdrvi_create()`; hot-plug (card detect edge interrupt through dmhaman,
+  debouncing, optional polling) is handled by the separate **dmsdiod**
+  service, started per host by libsystemd from a `[class=sdio]` device rule
+  ([services/dmsdiod](services/dmsdiod/README.md)).
 
 ## Building
 
@@ -50,7 +53,8 @@ make DMOD_MODE=DMOD_MODULE DMOD_DIR=/path/to/dmod
 card of the x86_64 port (`src/port/x86_64`): SDSC v1/v2, SDHC and SDXC
 identification, 64-bit capacity and offsets, sector and unaligned I/O,
 erase, write protection, CRC/timeout/malformed-response errors, retries,
-removal during a transfer, stale handles and the presence worker. The test
+removal during a transfer, stale handles and the presence hooks used by
+dmsdiod. The test
 uses the driver the way dmdevfs does - through the dmdrvi DIF - and
 implements the dmdrvi MAL to observe hot-plug notifications.
 
@@ -59,7 +63,7 @@ implements the dmdrvi MAL to observe hot-plug notifications.
 # default (stm32f7) because dmgpio only publishes stm32 headers
 mkdir -p build && cd build
 cmake .. -DDMOD_TOOLS_NAME=arch/x86_64
-cmake --build . --target dmsdio test_dmsdio
+cmake --build . --target dmsdio test_dmsdio dmsdiod
 cd ..
 
 # simulated card port
@@ -71,7 +75,7 @@ cd ..
 
 export DMOD_DMF_DIR=$(pwd)/build/dmf
 dmf-get install dmini -y
-dmf-get install dmhaman -y
+dmf-get install libsystemd -y
 dmod_loader build/dmf/test_dmsdio.dmf
 ```
 
@@ -90,12 +94,16 @@ Once a card is identified, `/dev/dmsdio0/0` appears and can be used with the
 regular file API using 64-bit offsets; `DMDRVI_IOCTL_BLOCK_GET_INFO`
 reports the geometry.
 
+For hot-plug, install the dmsdiod service's `dmsdiod.rules` and
+`dmsdiod@.ini` into libsystemd's rules and units directories: libsystemd
+then starts `dmsdiod@dmsdio0` as soon as dmsdio reports `/dev/dmsdio0`.
+
 ## API
 
 | Item | Description |
 |------|-------------|
 | dmdrvi DIF (`dmdrvi_create`, `_open`, `_read`, `_write`, `_ioctl`, `_flush`, `_stat`, `_friend_changed`, ...) | Device model, see [docs/api-reference.md](docs/api-reference.md) |
-| `dmsdio_ioctl_cmd_get_host_info` / `_get_card_info` / `_rescan` | Driver specific ioctls |
+| `dmsdio_ioctl_cmd_get_host_info` / `_get_card_info` / `_rescan` / `_get_detect_config` / `_check_removal` | Driver specific ioctls |
 | `dmsdio_decode_csd()` / `_cid()` / `_scr()` / `_ssr()` | Register decoders |
 
 See [include/dmsdio.h](include/dmsdio.h) and
@@ -166,11 +174,15 @@ dmsdio/
 │   ├── dmsdio_cmd.c     # command layer, errno mapping
 │   ├── dmsdio_config.c  # ini configuration
 │   ├── dmsdio_decode.c  # CID/CSD/SCR/SD Status decoders
-│   ├── dmsdio_detect.c  # card detect + dmosi presence worker
+│   ├── dmsdio_detect.c  # card detect pin, lock-free removal check
 │   ├── dmsdio_ident.c   # identification and bus negotiation
 │   ├── dmsdio_io.c      # byte-offset I/O, read-modify-write
 │   ├── dmsdio_xfer.c    # block transfers, erase, retry/recovery
 │   └── port/
+├── services/
+│   └── dmsdiod/         # presence service (card detect / polling)
+│       ├── configs/     # dmsdiod.rules, dmsdiod@.ini for libsystemd
+│       └── main.c
 ├── tests/
 │   ├── CMakeLists.txt
 │   └── dmsdio_test.c

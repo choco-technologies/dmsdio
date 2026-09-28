@@ -75,12 +75,14 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     src/dmsdio_xfer.c
 )
 
+# libsystemd: the host node is reported under the "sdio" device class so a
+# device rule can start the dmsdiod presence service for it (services/dmsdiod).
 dmod_link_modules(${DMOD_MODULE_NAME}
     dmdrvi@2.0
     dmini
     dmosi
-    dmhaman
     dmgpio
+    libsystemd
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
@@ -93,5 +95,6 @@ target_include_directories(${DMOD_MODULE_NAME}_if INTERFACE
 
 add_subdirectory(src/port)
 target_link_libraries(${DMOD_MODULE_NAME} ${DMOD_MODULE_NAME}_port_if)
+add_subdirectory(services/dmsdiod)
 enable_testing()
 add_subdirectory(tests)

@@ -15,10 +15,16 @@ primitives (see [port-implementation.md](port-implementation.md)).
 `N` defaults to `instance - 1` (SDMMC1 → `/dev/dmsdio0`), see
 [configuration.md](configuration.md).
 
-Identification starts as soon as `dmdrvi_create()` returns, on the driver's
-own worker thread. The card node is only announced after
-`dmdrvi_path_ready()` for the host node because dmdevfs ignores hot-plug
-notices for a context it has not registered yet.
+A card present at boot is identified inside `dmdrvi_create()`. The card
+node is only announced after `dmdrvi_path_ready()` for the host node because
+dmdevfs ignores hot-plug notices for a context it has not registered yet.
+The driver starts no threads: later insertions and removals are driven by
+the dmsdiod service through the host node ioctls below (see
+[configuration.md](configuration.md#presence-monitoring-dmsdiod)).
+
+`dmdrvi_path_ready()` for the host node also reports it to libsystemd:
+`libsystemd_notify_device_added("sdio", "dmsdio<N>", "/dev/dmsdio<N>")`;
+`dmdrvi_free()` reports `libsystemd_notify_device_removed("sdio", "dmsdio<N>")`.
 
 ## Card node (`/dev/dmsdioN/0`)
 
@@ -71,7 +77,11 @@ Data transfers return `-ENOTSUP`; `stat` reports size 0.
 |---------|-------|--------|
 | `dmsdio_ioctl_cmd_get_host_info` | `dmsdio_host_info_t*` | `card_attached`, `generation`, `scan_count`, `last_error`, `retry_count` |
 | `dmsdio_ioctl_cmd_get_card_info` | `dmsdio_card_info_t*` | Card snapshot, `-ENODEV` without a card |
-| `dmsdio_ioctl_cmd_rescan` | `NULL` | Synchronously re-checks presence: verifies an attached card (CMD13) or identifies a new one. `0` when a card is attached afterwards, `-ENODEV` when the slot is empty |
+| `dmsdio_ioctl_cmd_rescan` | `NULL` | Synchronously re-checks presence: samples card detect, verifies an attached card (CMD13) or identifies a new one. `0` when a card is attached afterwards, `-ENODEV` when the slot is empty |
+| `dmsdio_ioctl_cmd_get_detect_config` | `dmsdio_detect_config_t*` | `card_detect_handler` (`""` = none), `debounce_ms`, `poll_interval_ms` from the ini section |
+| `dmsdio_ioctl_cmd_check_removal` | `NULL` | Samples card detect **without taking the driver lock**. When the slot is empty, a transfer in progress is abandoned with `-ENODEV` and the next rescan detaches the card. `0` card present, `-ENODEV` slot empty, `-ENOENT` no card detect pin, `-EIO` pin unreadable |
+
+The last three return `-ENOTSUP` on the card node.
 
 ## Card generation and stale handles
 
@@ -119,6 +129,8 @@ Declared in `include/dmsdio_types.h`:
   `write_protected`, `bus_width`, `clock_hz`
 * `dmsdio_host_info_t` - `instance`, `card_attached`, `generation`,
   `scan_count`, `last_error`, `retry_count`
+* `dmsdio_detect_config_t` - `card_detect_handler[DMSDIO_HANDLER_NAME_MAX]`,
+  `debounce_ms`, `poll_interval_ms`
 * `dmsdio_cid_t`, `dmsdio_csd_t`, `dmsdio_scr_t`, `dmsdio_ssr_t` - decoded registers
 
 ## Functions (Built-in API)

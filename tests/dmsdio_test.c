@@ -3,7 +3,6 @@
 #include "dmod_test.h"
 #include "dmdrvi.h"
 #include "dmini.h"
-#include "dmhaman.h"
 #include "dmsdio.h"
 #include "dmsdio_mock.h"
 #include <errno.h>
@@ -23,7 +22,6 @@
 #define HOST            1
 #define GIB             (1024ull * 1024ull * 1024ull)
 #define BLK             512u
-#define SCAN_WAIT_MS    3000
 
 typedef struct
 {
@@ -115,27 +113,6 @@ static dmsdio_card_info_t card_info(void)
     return info;
 }
 
-static void wait_first_scan(void)
-{
-    for (int i = 0; i < SCAN_WAIT_MS && host_info().scan_count == 0; i++)
-    {
-        Dmod_ThreadSleep(1);
-    }
-}
-
-static bool wait_attached(bool attached)
-{
-    for (int i = 0; i < SCAN_WAIT_MS; i++)
-    {
-        if (host_info().card_attached == attached)
-        {
-            return true;
-        }
-        Dmod_ThreadSleep(1);
-    }
-    return false;
-}
-
 static void open_card(void)
 {
     dmdrvi_dev_num_t num = card_num();
@@ -183,7 +160,6 @@ static void start_driver(const char* extra)
         return;
     }
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
-    wait_first_scan();
     /* What dmdevfs does once the host node is registered and mounted. */
     g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio0");
     open_card();
@@ -303,8 +279,7 @@ DMOD_TEST_STEP(dmsdio_card_node_waits_for_host_registration)
     g_ctx = g_drv.create(ini, &g_host_num);
     dmini_destroy(ini);
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
-    wait_first_scan();
-    /* identified, but dmdevfs has not registered the host node yet */
+    /* identified synchronously in create, but dmdevfs has not registered the host node yet */
     DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
     DMOD_TEST_EXPECT_EQ(g_available, 0);
     dmdrvi_dev_num_t num = card_num();
@@ -463,7 +438,6 @@ DMOD_TEST_STEP(dmsdio_reads_active_board_section)
     DMOD_TEST_EXPECT_NOT_NULL(g_ctx);
     DMOD_TEST_EXPECT_EQ(g_host_num.major, 3);
     g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
-    wait_first_scan();
     g_drv.path_ready(g_ctx, &g_host_num, "/dev/dmsdio3");
     DMOD_TEST_EXPECT_EQ(host_info().instance, 1);
     DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
@@ -482,6 +456,12 @@ DMOD_TEST_STEP(dmsdio_rejects_invalid_configuration)
     ini = dmini_create();
     dmini_parse_string(ini, "[dmsdio]\ninstance=7\nbus_width=4\n");
     DMOD_TEST_EXPECT_NULL(g_drv.create(ini, &num));     /* host acquisition fails */
+    dmini_destroy(ini);
+
+    ini = dmini_create();
+    dmini_parse_string(ini, "[dmsdio]\ninstance=1\n"
+                            "card_detect_handler=a_handler_name_longer_than_31_chars\n");
+    DMOD_TEST_EXPECT_NULL(g_drv.create(ini, &num));
     dmini_destroy(ini);
 }
 
@@ -710,34 +690,65 @@ DMOD_TEST_STEP(dmsdio_rescan_keeps_present_card)
 }
 
 /* ======================================================================
- *  Presence worker
+ *  Presence monitoring hooks (used by the dmsdiod service)
  * ====================================================================== */
 
-DMOD_TEST_STEP(dmsdio_worker_polls_presence_without_card_detect)
+DMOD_TEST_STEP(dmsdio_card_present_at_boot_is_identified_in_create)
 {
-    use_card(dmsdio_card_type_sdhc, "poll_interval_ms=5\n");
-    g_available = 0;
-    g_unavailable = 0;
-    dmsdio_port_mock_remove(HOST);
-    DMOD_TEST_EXPECT_TRUE(wait_attached(false));
-    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
-    dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdxc);
-    DMOD_TEST_EXPECT_TRUE(wait_attached(true));
-    DMOD_TEST_EXPECT_EQ(g_available, 1);
-    DMOD_TEST_EXPECT_EQ(card_info().type, dmsdio_card_type_sdxc);
+    /* No thread, no service: the card is attached when create returns. */
+    stop_driver();
+    dmini_context_t ini = dmini_create();
+    dmini_parse_string(ini, "[dmsdio]\ninstance=1\n");
+    g_ctx = g_drv.create(ini, &g_host_num);
+    dmini_destroy(ini);
+    g_host = g_drv.open(g_ctx, DMDRVI_O_RDWR, &g_host_num);
+    DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
+    DMOD_TEST_EXPECT_EQ(host_info().scan_count, 1u);
+    Dmod_ThreadSleep(50);
+    DMOD_TEST_EXPECT_EQ(host_info().scan_count, 1u);   /* nothing polls behind our back */
 }
 
-DMOD_TEST_STEP(dmsdio_card_detect_handler_lifecycle)
+DMOD_TEST_STEP(dmsdio_detect_config_is_handed_out)
 {
-    use_card(dmsdio_card_type_sdhc, "card_detect_handler=dmsdio_test_cd\n");
-    DMOD_TEST_EXPECT_NOT_NULL(dmhaman_get_handler("dmsdio_test_cd"));
-    /* ISR path only enqueues; without a card detect GPIO the edge is ignored. */
-    DMOD_TEST_EXPECT_EQ(dmhaman_call_handler("dmsdio_test_cd", NULL), 0);
-    Dmod_ThreadSleep(200);
-    DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
+    use_card(dmsdio_card_type_sdhc, "card_detect_handler=sd0_card_detect\n"
+                                    "card_detect_debounce_ms=20\npoll_interval_ms=250\n");
+    dmsdio_detect_config_t config;
+    memset(&config, 0xFF, sizeof(config));
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_get_detect_config, &config), 0);
+    DMOD_TEST_EXPECT_EQ(strcmp(config.card_detect_handler, "sd0_card_detect"), 0);
+    DMOD_TEST_EXPECT_EQ(config.debounce_ms, 20u);
+    DMOD_TEST_EXPECT_EQ(config.poll_interval_ms, 250u);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, dmsdio_ioctl_cmd_get_detect_config, &config), -ENOTSUP);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_get_detect_config, NULL), -EINVAL);
+
+    use_card(dmsdio_card_type_sdhc, "poll_interval_ms=0\n");
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_get_detect_config, &config), 0);
+    DMOD_TEST_EXPECT_EQ(config.card_detect_handler[0], '\0');
+    DMOD_TEST_EXPECT_EQ(config.poll_interval_ms, 0u);
+}
+
+DMOD_TEST_STEP(dmsdio_check_removal_without_card_detect_pin)
+{
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_host, dmsdio_ioctl_cmd_check_removal, NULL), -ENOENT);
+    DMOD_TEST_EXPECT_EQ(g_drv.ioctl(g_ctx, g_card, dmsdio_ioctl_cmd_check_removal, NULL), -ENOTSUP);
+    /* Nothing flagged: the card keeps working. */
     DMOD_TEST_EXPECT_EQ(card_read(g_buf, BLK, 0), (dmdrvi_ssize_t)BLK);
-    stop_driver();
-    DMOD_TEST_EXPECT_NULL(dmhaman_get_handler("dmsdio_test_cd"));
+}
+
+DMOD_TEST_STEP(dmsdio_rescan_follows_removal_and_insertion)
+{
+    /* What dmsdiod does on every poll interval without a card detect pin. */
+    dmsdio_port_mock_remove(HOST);
+    DMOD_TEST_EXPECT_EQ(rescan(), -ENODEV);
+    DMOD_TEST_EXPECT_FALSE(host_info().card_attached);
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
+    DMOD_TEST_EXPECT_EQ(rescan(), -ENODEV);
+    DMOD_TEST_EXPECT_EQ(g_unavailable, 1);
+    dmsdio_port_mock_insert(HOST, dmsdio_card_type_sdxc);
+    DMOD_TEST_EXPECT_EQ(rescan(), 0);
+    DMOD_TEST_EXPECT_TRUE(host_info().card_attached);
+    DMOD_TEST_EXPECT_EQ(g_available, 2);
+    DMOD_TEST_EXPECT_EQ(card_info().type, dmsdio_card_type_sdxc);
 }
 
 /* ======================================================================

@@ -3,8 +3,8 @@
 # 	dmsdio - SD memory card driver (SDSC/SDHC/SDXC).
 #
 # 	The CMake build is the reference build: it also fetches the headers of
-# 	dmdrvi, dmini, dmosi, dmhaman and dmgpio (dmod_link_modules) and builds
-# 	dmsdio_port and the tests. Pass their include directories through
+# 	dmdrvi, dmini, dmosi, dmgpio and libsystemd (dmod_link_modules) and builds
+# 	dmsdio_port, the dmsdiod service and the tests. Pass their include directories through
 # 	DMOD_INC_DIRS when building with make.
 #
 # #############################################################################

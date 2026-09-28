@@ -1,0 +1,32 @@
+# DMOD Resource File for dmsdiod
+# This file specifies where resources should be installed
+
+# === Core Module ===
+# Main module file - always installed
+dmf=./${module}.dmf => ${destination}/${module}.dmf [origin=${dmf_dir}/${module}.dmf]
+
+# Compressed module
+dmfc=./${module}.dmfc => ${destination}/${module}.dmfc [origin=${build_dir}/dmfc/${module}.dmfc]
+
+# Dependencies file (if exists)
+dmd=./${module}.dmd => ${destination}/${module}.dmd [origin=${dmf_dir}/${module}.dmd]
+
+# Version information
+version=./${module}_version.txt => ${destination}/${module}_version.txt [origin=${dmf_dir}/${module}_version.txt]
+
+# === Documentation ===
+# NOTE: ${repo_dir} is the top-level repo root (dmsdiod is built through
+# add_subdirectory() from dmsdio's CMakeLists.txt), so paths are relative to
+# the repo root, not to services/dmsdiod.
+readme=./README.md => ${destination}/${module}/README.md [origin=${repo_dir}/services/dmsdiod/README.md]
+
+# === Configuration Files ===
+# dmsdiod@.ini unit template + dmsdiod.rules device rule, ready to drop into
+# libsystemd's units/rules directories - see README.md
+configs=./configs => ${destination}/${module}/configs [origin=${repo_dir}/services/dmsdiod/configs]
+
+# === License ===
+license=./LICENSE => ${destination}/${module}/LICENSE [origin=${repo_dir}/LICENSE]
+
+# Adding itself
+dmr=./${module}.dmr => ${destination}/${module}/${module}.dmr [origin=${repo_dir}/services/dmsdiod/${module}.dmr]
