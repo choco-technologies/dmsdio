@@ -36,18 +36,14 @@ static void notify(struct dmdrvi_context* ctx, bool available)
     num.major = ctx->config.major;
     num.minor = DMSDIO_CARD_MINOR;
 
-    if (available && ctx->host_ready && !ctx->card_announced &&
-        Dmod_IsFunctionConnected(dmdrvi_device_available))
+    if (available && ctx->host_ready && !ctx->card_announced)
     {
         dmdrvi_device_available(ctx, &num);
         ctx->card_announced = true;
     }
     else if (!available && ctx->card_announced)
     {
-        if (Dmod_IsFunctionConnected(dmdrvi_device_unavailable))
-        {
-            dmdrvi_device_unavailable(ctx, &num);
-        }
+        dmdrvi_device_unavailable(ctx, &num);
         ctx->card_announced = false;
     }
 }
