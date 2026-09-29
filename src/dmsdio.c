@@ -26,7 +26,7 @@
  * a card present at boot.
  */
 
-#define SCRATCH_ALIGNMENT   32u     /* cache line: safe for DMA cache maintenance */
+#define BOUNCE_ALIGNMENT    32u     /* cache line: safe for DMA cache maintenance */
 
 static bool is_valid_context(struct dmdrvi_context* ctx)
 {
@@ -52,6 +52,38 @@ static int check_card_handle(struct dmdrvi_context* ctx, const dmsdio_handle_t* 
     return (handle->generation == ctx->card.generation) ? 0 : -ESTALE;
 }
 
+/*
+ * The bounce buffer comes from the port - memory its data path moves at the
+ * full bus clock (internal SRAM on STM32, see dmsdio_port_buffer_alloc()) -
+ * and only from the regular heap if the port has none.
+ */
+static uint8_t* allocate_bounce(struct dmdrvi_context* ctx)
+{
+    size_t size = (size_t)ctx->config.bounce_blocks * DMSDIO_BLOCK_SIZE;
+    ctx->bounce = dmsdio_port_buffer_alloc(ctx->config.instance, size);
+    ctx->bounce_from_port = (ctx->bounce != NULL);
+    if (ctx->bounce == NULL)
+    {
+        DMOD_LOG_WARN("dmsdio: no port buffer for %u blocks, bouncing through the heap\n",
+                      (unsigned)ctx->config.bounce_blocks);
+        ctx->bounce = Dmod_AlignedMalloc(size, BOUNCE_ALIGNMENT);
+    }
+    return ctx->bounce;
+}
+
+static void free_bounce(struct dmdrvi_context* ctx)
+{
+    if (ctx->bounce_from_port)
+    {
+        dmsdio_port_buffer_free(ctx->config.instance, ctx->bounce);
+    }
+    else
+    {
+        Dmod_Free(ctx->bounce);
+    }
+    ctx->bounce = NULL;
+}
+
 static void destroy_context(struct dmdrvi_context* ctx, bool port_ready)
 {
     dmsdio_detect_release(ctx);
@@ -68,17 +100,17 @@ static void destroy_context(struct dmdrvi_context* ctx, bool port_ready)
     {
         dmosi_mutex_destroy(ctx->cd_lock);
     }
-    Dmod_Free(ctx->scratch);
+    free_bounce(ctx);
     ctx->magic = 0;
     Dmod_Free(ctx);
 }
 
 static int allocate_resources(struct dmdrvi_context* ctx)
 {
-    ctx->scratch = Dmod_AlignedMalloc(DMSDIO_BLOCK_SIZE, SCRATCH_ALIGNMENT);
+    allocate_bounce(ctx);
     ctx->lock    = dmosi_mutex_create(false);
     ctx->cd_lock = dmosi_mutex_create(false);
-    if (ctx->scratch == NULL || ctx->lock == NULL || ctx->cd_lock == NULL)
+    if (ctx->bounce == NULL || ctx->lock == NULL || ctx->cd_lock == NULL)
     {
         DMOD_LOG_ERROR("dmsdio: out of memory\n");
         return -ENOMEM;

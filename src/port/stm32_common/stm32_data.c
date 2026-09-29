@@ -2,6 +2,7 @@
 #include "dmod.h"
 #include "dmosi.h"
 #include "dmdma.h"
+#include "dmheap.h"
 #include "stm32_common.h"
 #include <errno.h>
 
@@ -194,11 +195,69 @@ static int start_dma(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st,
 }
 
 /* Whole cache lines only, so maintenance never touches neighbouring data. */
-static bool dma_capable(const dmsdio_data_t* data, uint32_t length)
+static bool dma_capable(const void* buffer, size_t length)
 {
-    return ((uintptr_t)data->buffer % STM32_SDIO_DMA_ALIGNMENT) == 0 &&
+    return ((uintptr_t)buffer % STM32_SDIO_DMA_ALIGNMENT) == 0 &&
            (length % STM32_SDIO_DMA_ALIGNMENT) == 0 &&
-           stm32_sdio_family_dma_reachable(data->buffer, length);
+           stm32_sdio_family_dma_reachable(buffer, length);
+}
+
+/*
+ * FMC/FSMC external memory (banks 1-6, e.g. the SDRAM dmod-boot puts module
+ * memory in on STM32F746G-DISCO). A DMA stream cannot read it fast enough to
+ * feed the host FIFO at 48 MHz / 4-bit (~24 MB/s): writes from there end in
+ * TXUNDERR - hardware flow control is off (see stm32_common.c), so nothing
+ * stops the card clock while the FIFO runs dry. Reads into it keep up.
+ */
+#define STM32_EXTERNAL_MEMORY_START 0x60000000UL
+#define STM32_EXTERNAL_MEMORY_END   0xE0000000UL
+
+static bool in_external_memory(const void* buffer, size_t length)
+{
+    uintptr_t start = (uintptr_t)buffer;
+    return start < STM32_EXTERNAL_MEMORY_END && start + length > STM32_EXTERNAL_MEMORY_START;
+}
+
+dmod_dmsdio_port_api_declaration(1.0, bool, _buffer_is_direct,
+    ( dmsdio_instance_t instance, const void* buffer, size_t length, dmsdio_direction_t direction ))
+{
+    (void)instance;
+    return buffer != NULL && dma_capable(buffer, length) &&
+           (direction == dmsdio_direction_read || !in_external_memory(buffer, length));
+}
+
+/*
+ * Bounce buffers come from dmod-boot's "dma" heap (internal SRAM - DTCM on
+ * STM32F7, which DMA2 reaches through the AHBS port and the D-cache never
+ * holds), like dmeth's descriptor rings. Targets without that heap use the
+ * regular one, which is internal SRAM there.
+ */
+#define STM32_DMA_HEAP_NAME         "dma"
+
+dmod_dmsdio_port_api_declaration(1.0, void*, _buffer_alloc, ( dmsdio_instance_t instance, size_t size ))
+{
+    (void)instance;
+    dmheap_context_t* heap = dmheap_get_context_by_name(STM32_DMA_HEAP_NAME);
+    return (heap != NULL) ? dmheap_aligned_alloc(heap, STM32_SDIO_DMA_ALIGNMENT, size, "dmsdio_port")
+                          : Dmod_AlignedMalloc(size, STM32_SDIO_DMA_ALIGNMENT);
+}
+
+dmod_dmsdio_port_api_declaration(1.0, void, _buffer_free, ( dmsdio_instance_t instance, void* buffer ))
+{
+    (void)instance;
+    if (buffer == NULL)
+    {
+        return;
+    }
+    dmheap_context_t* heap = dmheap_get_context_by_name(STM32_DMA_HEAP_NAME);
+    if (heap != NULL)
+    {
+        dmheap_free(heap, buffer, true);
+    }
+    else
+    {
+        Dmod_Free(buffer);
+    }
 }
 
 dmsdio_status_t stm32_sdio_data_arm(volatile stm32_sdio_t* regs, stm32_sdio_state_t* st,
@@ -209,7 +268,7 @@ dmsdio_status_t stm32_sdio_data_arm(volatile stm32_sdio_t* regs, stm32_sdio_stat
     uint32_t length = data->block_size * data->block_count;
     st->data_read = (data->direction == dmsdio_direction_read);
     st->data_dma  = !(st->data_read && length <= STM32_SDIO_FIFO_BYTES);
-    if (status == dmsdio_status_ok && st->data_dma && !dma_capable(data, length))
+    if (status == dmsdio_status_ok && st->data_dma && !dma_capable(data->buffer, length))
     {
         DMOD_LOG_ERROR("dmsdio_port: buffer %p not usable for DMA\n", data->buffer);
         status = dmsdio_status_invalid;

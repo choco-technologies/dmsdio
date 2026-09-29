@@ -237,7 +237,7 @@ static int select_card(struct dmdrvi_context* ctx, dmsdio_card_info_t* card)
 static int read_register(struct dmdrvi_context* ctx, uint8_t acmd, uint32_t size)
 {
     dmsdio_data_t data = {
-        .buffer      = ctx->scratch,
+        .buffer      = ctx->bounce,
         .block_size  = size,
         .block_count = 1,
         .direction   = dmsdio_direction_read,
@@ -251,7 +251,7 @@ static int read_scr(struct dmdrvi_context* ctx, dmsdio_card_info_t* card)
     int ret = read_register(ctx, SD_ACMD_SEND_SCR, SD_SCR_SIZE);
     if (ret == 0)
     {
-        ret = dmsdio_decode_scr(ctx->scratch, &card->scr);
+        ret = dmsdio_decode_scr(ctx->bounce, &card->scr);
     }
     return ret;
 }
@@ -285,7 +285,7 @@ static int read_ssr(struct dmdrvi_context* ctx, dmsdio_card_info_t* card)
     int ret = read_register(ctx, SD_ACMD_SD_STATUS, SD_SSR_SIZE);
     if (ret == 0)
     {
-        ret = dmsdio_decode_ssr(ctx->scratch, &card->ssr);
+        ret = dmsdio_decode_ssr(ctx->bounce, &card->ssr);
     }
     if (ret == 0 && card->bus_width == dmsdio_bus_width_4bit &&
         card->ssr.bus_width_code != SSR_BUS_WIDTH_4BIT)
@@ -311,7 +311,7 @@ static uint32_t switch_bits(const uint8_t* raw, unsigned msb, unsigned width)
 static int switch_function(struct dmdrvi_context* ctx, uint32_t arg)
 {
     dmsdio_data_t data = {
-        .buffer      = ctx->scratch,
+        .buffer      = ctx->bounce,
         .block_size  = SD_SWITCH_STATUS_SIZE,
         .block_count = 1,
         .direction   = dmsdio_direction_read,
@@ -330,7 +330,7 @@ static int switch_high_speed(struct dmdrvi_context* ctx, dmsdio_card_info_t* car
         return 0;
     }
     int ret = switch_function(ctx, SD_SWITCH_CHECK | SD_SWITCH_HIGH_SPEED);
-    if (ret != 0 || (switch_bits(ctx->scratch, SWITCH_GROUP1_SUPPORT, 16) & 0x2u) == 0)
+    if (ret != 0 || (switch_bits(ctx->bounce, SWITCH_GROUP1_SUPPORT, 16) & 0x2u) == 0)
     {
         return ret;
     }
@@ -339,7 +339,7 @@ static int switch_high_speed(struct dmdrvi_context* ctx, dmsdio_card_info_t* car
     {
         return ret;
     }
-    if (switch_bits(ctx->scratch, SWITCH_GROUP1_RESULT, 4) != SD_SWITCH_HIGH_SPEED)
+    if (switch_bits(ctx->bounce, SWITCH_GROUP1_RESULT, 4) != SD_SWITCH_HIGH_SPEED)
     {
         DMOD_LOG_WARN("dmsdio: card refused High Speed, staying at default speed\n");
         return 0;

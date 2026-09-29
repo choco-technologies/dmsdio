@@ -49,12 +49,14 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
 # dmdrvi: headers only - dmsdio_types.h numbers the dmsdio ioctls from
 # DMDRVI_IOCTL_CUSTOM_BASE.
 # dmdma 0.4: dmdma_lease_start_ex() (FIFO/burst/flow-controller options)
+# dmheap: bounce buffers from dmod-boot's "dma" heap (internal SRAM).
 set(DMSDIO_PORT_MODULES dmdrvi@>=2.0)
 if(DMOD_CPU_FAMILY MATCHES "^stm32")
     list(APPEND DMSDIO_PORT_MODULES
         dmclk_port
         dmosi
         dmdma@>=0.4
+        dmheap
     )
 endif()
 dmod_link_modules(${DMOD_MODULE_NAME} ${DMSDIO_PORT_MODULES})

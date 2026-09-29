@@ -39,12 +39,16 @@ dmdrvi_ssize_t dmdrvi_write(ctx, handle, const void* buf, size_t size, dmdrvi_of
 ```
 
 * `offset` is a 64-bit byte offset; any offset and length are accepted.
-  Whole blocks in a 32-byte aligned buffer are transferred directly between the caller's
-  buffer and the card (CMD17/CMD18, CMD24/CMD25 + CMD12, split into at most
-  `max_blocks_per_transfer` blocks per command). A partial block at either
-  end of the range - or a misaligned buffer - goes through a one-block
-  bounce buffer; writes then read-modify-write that block so neighbouring
-  bytes are preserved.
+  Whole blocks are transferred directly between the caller's buffer and the
+  card (CMD17/CMD18, CMD24/CMD25 + CMD12, split into at most
+  `max_blocks_per_transfer` blocks per command) when the port accepts the
+  buffer for that direction (`dmsdio_port_buffer_is_direct()`: 32-byte
+  aligned, reachable, and fast enough - on STM32 a write from external
+  SDRAM is not). Other whole blocks go through the bounce buffer, up to
+  `bounce_blocks` blocks per command; the port allocates it
+  (`dmsdio_port_buffer_alloc()`, internal SRAM on STM32). A partial block at
+  either end of the range goes through the bounce buffer too, and writes
+  read-modify-write it so neighbouring bytes are preserved.
 * Reads return the byte count, clipped at the end of the card, and `0` at
   or past the end. Writes starting at or past the end return `-ENOSPC`,
   writes crossing the end are clipped.

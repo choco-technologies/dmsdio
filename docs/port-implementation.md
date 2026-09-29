@@ -27,6 +27,9 @@ Declared in [`include/dmsdio_port.h`](../include/dmsdio_port.h):
 | `_set_bus_width(instance, width)` | Host side data bus width (1 or 4) |
 | `_execute(instance, &command, data, &response)` | Send one command, capture the response shape requested by `command.response`, and run the optional data phase. The data path must be armed before the command is sent. Completion and errors are interrupt driven and bounded by the command timeout and `data->timeout_ms` (per block) |
 | `_abort(instance)` | Stop an interrupted data phase and return the controller to idle. Called after every failed `_execute`; must not send commands to the card |
+| `_buffer_alloc(instance, size)` | Allocate a `DMSDIO_TRANSFER_ALIGNMENT` aligned buffer the data path always moves at full bus speed (the core's bounce buffer). `NULL` if the port has none - the core then uses its own heap |
+| `_buffer_free(instance, buffer)` | Release a buffer from `_buffer_alloc` |
+| `_buffer_is_direct(instance, buffer, length, direction)` | Whether the core may run a data phase straight from/to a caller's buffer. False for buffers the port cannot use or cannot sustain the bus rate with; the core bounces those. A policy, not a limit `_execute` enforces |
 
 ### Responses
 
@@ -49,8 +52,8 @@ and recovery policy.
 for card data, 8 for SCR, 64 for SD Status / switch status). Buffers passed
 for 512-byte transfers are `DMSDIO_TRANSFER_ALIGNMENT` (32) byte aligned - one
 Cortex-M7 cache line;
-the core bounces misaligned caller buffers itself. The internal scratch
-block is 32-byte aligned so a port can do cache maintenance on it.
+the core bounces every buffer `_buffer_is_direct()` rejects through the
+buffer from `_buffer_alloc()`.
 
 ## Adding a CPU family
 
@@ -108,6 +111,15 @@ Implementation notes:
   have been seen. DMA buffers must start on and span whole 32-byte lines
   (`DMSDIO_TRANSFER_ALIGNMENT`, the core bounces other buffers) and be
   reachable by DMA2 (not F4 CCM RAM).
+* Memory for writes: DMA2 cannot read FMC/FSMC external memory
+  (`0x60000000`-`0xDFFFFFFF`, e.g. the SDRAM dmod-boot puts module memory in
+  on STM32F746G-DISCO) fast enough to keep the FIFO fed at 48 MHz / 4-bit -
+  such writes end in `TXUNDERR`, since hardware flow control is off.
+  `_buffer_is_direct()` therefore rejects writes from there, and
+  `_buffer_alloc()` hands out memory from dmod-boot's `dma` heap (internal
+  SRAM - DTCM on STM32F7, reached through the AHBS port, never cached), or
+  the regular heap on targets without one. Reads into external memory keep
+  up and stay direct.
 * D-cache (Cortex-M7): whenever `SCB->CCR.DC` is set, the DMA buffer is
   cleaned before a write, cleaned+invalidated before a read and invalidated
   again after it (by address, `DCCMVAC`/`DCCIMVAC`/`DCIMVAC`). With the cache

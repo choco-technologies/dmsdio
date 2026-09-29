@@ -50,6 +50,7 @@ typedef struct
     bool        card_high_speed;    /**< Card switched to High Speed (CMD6) */
     bool        powered;            /**< Card power */
     uint64_t    last_address;       /**< Last read/write command argument */
+    uint32_t    indirect_writes;    /**< Write data phases from a buffer _buffer_is_direct() rejects */
 } dmsdio_mock_stats_t;
 
 /** Insert a fresh card of the given type (storage cleared). */
@@ -70,6 +71,14 @@ dmod_dmsdio_port_api(1.0, int, _mock_set_write_protect, ( dmsdio_instance_t inst
 
 /** Let the card refuse the CMD6 High Speed switch (switch status reports 0xF). */
 dmod_dmsdio_port_api(1.0, int, _mock_refuse_high_speed, ( dmsdio_instance_t instance, bool refuse ));
+
+/**
+ * Model memory the data path cannot write from at full speed (like external
+ * SDRAM on STM32F7): while enabled, only buffers from _buffer_alloc() are
+ * direct for writes, and write data phases from anything else are counted
+ * in indirect_writes.
+ */
+dmod_dmsdio_port_api(1.0, int, _mock_set_slow_writes, ( dmsdio_instance_t instance, bool enabled ));
 
 /** Read and optionally clear the counters. */
 dmod_dmsdio_port_api(1.0, int, _mock_get_stats, ( dmsdio_instance_t instance, dmsdio_mock_stats_t* stats, bool reset ));

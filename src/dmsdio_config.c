@@ -9,6 +9,7 @@
 #define DEFAULT_WRITE_TIMEOUT_MS    500
 #define DEFAULT_ERASE_TIMEOUT_MS    3000
 #define DEFAULT_MAX_BLOCKS          128
+#define DEFAULT_BOUNCE_BLOCKS       8
 #define DEFAULT_SETTLE_MS           50
 #define DEFAULT_POLL_INTERVAL_MS    1000
 #define MAX_RETRIES                 16
@@ -89,9 +90,10 @@ static int read_bus(dmini_context_t ini, const char* section, dmsdio_config_t* c
     c->max_clock_hz = read_u32(ini, section, "max_clock_hz", DEFAULT_MAX_CLOCK_HZ);
     c->high_speed   = read_bool(ini, section, "high_speed", true);
     c->max_blocks_per_transfer = read_u32(ini, section, "max_blocks_per_transfer", DEFAULT_MAX_BLOCKS);
+    c->bounce_blocks = read_u32(ini, section, "bounce_blocks", DEFAULT_BOUNCE_BLOCKS);
 
     if (instance < 1 || instance > 255 || (width != 1 && width != 4) ||
-        c->max_clock_hz < 400000u || c->max_blocks_per_transfer == 0)
+        c->max_clock_hz < 400000u || c->max_blocks_per_transfer == 0 || c->bounce_blocks == 0)
     {
         DMOD_LOG_ERROR("dmsdio: invalid instance/bus configuration in [%s]\n", label(section));
         return -EINVAL;

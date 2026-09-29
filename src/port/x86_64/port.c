@@ -183,6 +183,54 @@ static dmsdio_status_t execute_with_fault(mock_host_t* host, const dmsdio_comman
     }
 }
 
+/* ---- buffers ---- */
+
+static bool in_port_buffer(const mock_host_t* host, const void* buffer, size_t length)
+{
+    const uint8_t* start = buffer;
+    return host->port_buffer != NULL && start >= host->port_buffer &&
+           length <= host->port_buffer_size - (size_t)(start - host->port_buffer);
+}
+
+static bool buffer_is_direct(const mock_host_t* host, const void* buffer, size_t length,
+                             dmsdio_direction_t direction)
+{
+    bool aligned = ((uintptr_t)buffer % DMSDIO_TRANSFER_ALIGNMENT) == 0;
+    bool fast    = direction == dmsdio_direction_read || !host->slow_writes ||
+                   in_port_buffer(host, buffer, length);
+    return buffer != NULL && aligned && fast;
+}
+
+dmod_dmsdio_port_api_declaration(1.0, bool, _buffer_is_direct,
+    ( dmsdio_instance_t instance, const void* buffer, size_t length, dmsdio_direction_t direction ))
+{
+    mock_host_t* host = get_host(instance);
+    return host != NULL && buffer_is_direct(host, buffer, length, direction);
+}
+
+dmod_dmsdio_port_api_declaration(1.0, void*, _buffer_alloc, ( dmsdio_instance_t instance, size_t size ))
+{
+    mock_host_t* host = get_host(instance);
+    void* buffer = (host != NULL) ? Dmod_AlignedMalloc(size, DMSDIO_TRANSFER_ALIGNMENT) : NULL;
+    if (buffer != NULL)
+    {
+        host->port_buffer      = buffer;
+        host->port_buffer_size = size;
+    }
+    return buffer;
+}
+
+dmod_dmsdio_port_api_declaration(1.0, void, _buffer_free, ( dmsdio_instance_t instance, void* buffer ))
+{
+    mock_host_t* host = get_host(instance);
+    if (host != NULL && buffer != NULL && buffer == (void*)host->port_buffer)
+    {
+        host->port_buffer      = NULL;
+        host->port_buffer_size = 0;
+    }
+    Dmod_Free(buffer);
+}
+
 dmod_dmsdio_port_api_declaration(1.0, dmsdio_status_t, _execute,
     ( dmsdio_instance_t instance, const dmsdio_command_t* command,
       const dmsdio_data_t* data, dmsdio_response_t* response ))
@@ -194,6 +242,11 @@ dmod_dmsdio_port_api_declaration(1.0, dmsdio_status_t, _execute,
         return dmsdio_status_invalid;
     }
     response = (response != NULL) ? response : &scratch;
+    if (data != NULL && data->direction == dmsdio_direction_write &&
+        !buffer_is_direct(host, data->buffer, (size_t)data->block_size * data->block_count, data->direction))
+    {
+        host->stats.indirect_writes++;
+    }
     dmsdio_status_t st = fault_matches(host, command, data)
                        ? execute_with_fault(host, command, data, response)
                        : mock_card_execute(host, command, data, response);
@@ -285,6 +338,17 @@ dmod_dmsdio_port_api_declaration(1.0, int, _mock_refuse_high_speed, ( dmsdio_ins
         return -EINVAL;
     }
     host->refuse_high_speed = refuse;
+    return 0;
+}
+
+dmod_dmsdio_port_api_declaration(1.0, int, _mock_set_slow_writes, ( dmsdio_instance_t instance, bool enabled ))
+{
+    mock_host_t* host = get_host(instance);
+    if (host == NULL)
+    {
+        return -EINVAL;
+    }
+    host->slow_writes = enabled;
     return 0;
 }
 

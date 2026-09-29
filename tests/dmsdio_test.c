@@ -46,8 +46,9 @@ static void*             g_card;
 static volatile int      g_available;
 static volatile int      g_unavailable;
 static dmdrvi_dev_num_t  g_announced;
-static uint8_t           g_buf[16 * BLK + 8];
-static uint8_t           g_ref[16 * BLK];
+/* Aligned for direct transfers; g_buf + 1 is the misaligned case. */
+static uint8_t           g_buf[16 * BLK + 8] __attribute__((aligned(DMSDIO_TRANSFER_ALIGNMENT)));
+static uint8_t           g_ref[16 * BLK] __attribute__((aligned(DMSDIO_TRANSFER_ALIGNMENT)));
 
 /* ---- dmdrvi MAL (normally implemented by dmdevfs) ---- */
 
@@ -246,6 +247,7 @@ void dmod_test_setup(void)
     g_available = 0;
     g_unavailable = 0;
     dmsdio_port_mock_inject_fault(HOST, dmsdio_mock_fault_none, 0, 0);
+    dmsdio_port_mock_set_slow_writes(HOST, false);
     use_card(dmsdio_card_type_sdhc, NULL);
     stats(true);
 }
@@ -523,6 +525,58 @@ DMOD_TEST_STEP(dmsdio_unaligned_read_spanning_blocks)
     /* misaligned destination buffer takes the bounce path */
     DMOD_TEST_EXPECT_EQ(card_read(g_buf + 1, 2 * BLK, 0), (dmdrvi_ssize_t)(2 * BLK));
     DMOD_TEST_EXPECT_TRUE(matches_pattern(g_buf + 1, 0, 2 * BLK));
+}
+
+DMOD_TEST_STEP(dmsdio_misaligned_buffer_bounces_multi_block)
+{
+    /* 16 blocks through the 8-block bounce buffer: two commands, not 16. */
+    DMOD_TEST_EXPECT_EQ(card_read(g_buf + 1, 16 * BLK, 0), (dmdrvi_ssize_t)(16 * BLK));
+    DMOD_TEST_EXPECT_TRUE(matches_pattern(g_buf + 1, 0, 16 * BLK));
+    dmsdio_mock_stats_t s = stats(true);
+    DMOD_TEST_EXPECT_EQ(s.commands[18], 2u);
+    DMOD_TEST_EXPECT_EQ(s.commands[17], 0u);
+
+    fill(g_buf + 1, 16 * BLK, 0x37);
+    DMOD_TEST_EXPECT_EQ(card_write(g_buf + 1, 16 * BLK, 32 * BLK), (dmdrvi_ssize_t)(16 * BLK));
+    s = stats(true);
+    DMOD_TEST_EXPECT_EQ(s.commands[25], 2u);
+    DMOD_TEST_EXPECT_EQ(s.commands[24], 0u);
+    DMOD_TEST_EXPECT_EQ(card_read(g_ref, 16 * BLK, 32 * BLK), (dmdrvi_ssize_t)(16 * BLK));
+    DMOD_TEST_EXPECT_TRUE(bytes_equal(g_ref, g_buf + 1, 16 * BLK));
+}
+
+DMOD_TEST_STEP(dmsdio_writes_from_slow_memory_go_through_the_port_buffer)
+{
+    /* Like STM32F7 with the buffer in external SDRAM: the port only takes
+     * its own buffer for writes, reads stay direct. */
+    dmsdio_port_mock_set_slow_writes(HOST, true);
+    fill(g_buf, 16 * BLK, 0x21);
+    DMOD_TEST_EXPECT_EQ(card_write(g_buf, 16 * BLK, 64 * BLK), (dmdrvi_ssize_t)(16 * BLK));
+    fill(g_ref, 100, 0x5A);
+    DMOD_TEST_EXPECT_EQ(card_write(g_ref, 100, 64 * BLK + 100), 100);    /* inside one block */
+    dmsdio_mock_stats_t s = stats(true);
+    DMOD_TEST_EXPECT_EQ(s.indirect_writes, 0u);
+    DMOD_TEST_EXPECT_EQ(s.commands[25], 2u);                /* 8 + 8 blocks */
+    DMOD_TEST_EXPECT_EQ(s.blocks_written, 17u);             /* + the partial block */
+
+    DMOD_TEST_EXPECT_EQ(card_read(g_buf + BLK, 8 * BLK, 64 * BLK), (dmdrvi_ssize_t)(8 * BLK));
+    s = stats(true);
+    DMOD_TEST_EXPECT_EQ(s.commands[18], 1u);                /* reads stay direct */
+    DMOD_TEST_EXPECT_TRUE(bytes_equal(g_buf + BLK + 100, g_ref, 100));
+    dmsdio_port_mock_set_slow_writes(HOST, false);
+}
+
+DMOD_TEST_STEP(dmsdio_bounce_blocks_is_configurable)
+{
+    use_card(dmsdio_card_type_sdhc, "bounce_blocks=4\n");
+    DMOD_TEST_EXPECT_NOT_NULL(g_ctx);
+    stats(true);
+    DMOD_TEST_EXPECT_EQ(card_read(g_buf + 1, 16 * BLK, 0), (dmdrvi_ssize_t)(16 * BLK));
+    DMOD_TEST_EXPECT_TRUE(matches_pattern(g_buf + 1, 0, 16 * BLK));
+    DMOD_TEST_EXPECT_EQ(stats(false).commands[18], 4u);
+
+    use_card(dmsdio_card_type_sdhc, "bounce_blocks=0\n");
+    DMOD_TEST_EXPECT_NULL(g_ctx);
 }
 
 DMOD_TEST_STEP(dmsdio_offsets_above_4gib_are_not_truncated)

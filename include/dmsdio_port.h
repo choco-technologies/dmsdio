@@ -86,4 +86,34 @@ dmod_dmsdio_port_api(1.0, dmsdio_status_t, _execute,
  */
 dmod_dmsdio_port_api(1.0, void, _abort, ( dmsdio_instance_t instance ));
 
+/* --- Buffers --- */
+
+/**
+ * @brief Allocate a buffer the port can always use for a data phase.
+ *
+ * DMSDIO_TRANSFER_ALIGNMENT aligned, in memory the data path moves at the
+ * full bus clock (e.g. internal SRAM a DMA controller reads fast enough to
+ * keep the host FIFO fed). The core bounces through it whatever
+ * _buffer_is_direct() rejects.
+ *
+ * @return NULL if no such memory is available (the core then falls back to
+ * its own heap).
+ */
+dmod_dmsdio_port_api(1.0, void*, _buffer_alloc, ( dmsdio_instance_t instance, size_t size ));
+
+/** @brief Release a buffer returned by _buffer_alloc(). */
+dmod_dmsdio_port_api(1.0, void, _buffer_free, ( dmsdio_instance_t instance, void* buffer ));
+
+/**
+ * @brief Whether a data phase can move @p length bytes directly from/to @p buffer.
+ *
+ * False when the buffer breaks the port's alignment rules, lies where the
+ * data path cannot reach it, or cannot sustain the bus rate in that
+ * direction (e.g. writes from external SDRAM, which starve the host FIFO at
+ * 48 MHz). _execute() may still accept such a buffer - this is a policy the
+ * core follows to avoid slow or failing transfers, not a hard limit.
+ */
+dmod_dmsdio_port_api(1.0, bool, _buffer_is_direct,
+    ( dmsdio_instance_t instance, const void* buffer, size_t length, dmsdio_direction_t direction ));
+
 #endif // DMSDIO_PORT_H

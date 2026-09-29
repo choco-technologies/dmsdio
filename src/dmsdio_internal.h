@@ -39,6 +39,7 @@ typedef struct
     uint32_t            write_timeout_ms;       /**< Write data phase / busy limit */
     uint32_t            erase_timeout_ms;       /**< Minimum erase busy limit */
     uint32_t            max_blocks_per_transfer;/**< Split larger requests */
+    uint32_t            bounce_blocks;          /**< Size of the bounce buffer in blocks */
     bool                cd_active_high;         /**< Card detect polarity */
     /* Presence monitoring policy - not used by the driver itself, handed to
      * the monitor service through DMDRVI_IOCTL_MONITOR_GET_POLICY. */
@@ -53,7 +54,8 @@ struct dmdrvi_context
     uint32_t            magic;          /**< DMSDIO_CONTEXT_MAGIC */
     dmsdio_config_t     config;         /**< Parsed configuration */
     dmosi_mutex_t       lock;           /**< Serializes all bus operations */
-    uint8_t*            scratch;        /**< One aligned block for RMW/bounce */
+    uint8_t*            bounce;         /**< config.bounce_blocks blocks for RMW/bounce, see dmsdio_io.c */
+    bool                bounce_from_port;/**< bounce came from dmsdio_port_buffer_alloc() */
     dmsdio_card_info_t  card;           /**< Attached card, type none if absent */
     uint32_t            generation;     /**< Bumped on every attach/detach */
     uint32_t            scan_count;     /**< Completed presence scans */

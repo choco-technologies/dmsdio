@@ -30,6 +30,9 @@ typedef struct
     uint32_t            clock_hz;
     dmsdio_bus_width_t  host_width;
     bool                powered;
+    bool                slow_writes;    /* only port buffers are direct for writes */
+    uint8_t*            port_buffer;    /* last _buffer_alloc() result */
+    size_t              port_buffer_size;
 
     /* card side */
     bool                inserted;

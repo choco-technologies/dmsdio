@@ -29,6 +29,7 @@ poll_interval_ms=0
 | `write_timeout_ms` | `500` | Per-block write busy limit, also used for CMD13 ready polling |
 | `erase_timeout_ms` | `3000` | Minimum erase busy limit per 4 MiB chunk (raised from SD Status `ERASE_TIMEOUT` when larger) |
 | `max_blocks_per_transfer` | `128` | Split larger requests into several multi-block commands |
+| `bounce_blocks` | `8` | Bounce buffer size in blocks (4 KiB by default), taken from the port's DMA-capable memory - dmod-boot's `dma` heap on STM32. Caller buffers the port cannot use directly (misaligned, or writes from external SDRAM) move through it, this many blocks per command |
 | `card_detect_active_level` | `low` | Card detect level meaning "card inserted" (`low` or `high`) |
 | `monitor_event_handler` | none | dmhaman handler name the card-detect GPIO's `interrupt_handler` points to (at most 31 characters) |
 | `monitor_settle_ms` | `50` | Quiet time after the last card detect edge before the card is re-checked |
