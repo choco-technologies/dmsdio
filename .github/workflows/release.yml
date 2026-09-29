@@ -19,8 +19,10 @@ jobs:
       - name: List available CPU families
         id: list-families
         run: |
+          # x86_64 is the simulated SD card used by the tests - never released.
           CPU_FAMILIES=$(find src/port -mindepth 2 -maxdepth 2 -name "port.c" -type f -printf '%h\n' | \
             xargs -n1 basename | \
+            grep -vx x86_64 | \
             sort | \
             jq -R -s -c 'split("\n") | map(select(length > 0))')
 

@@ -1,6 +1,11 @@
 # #############################################################################
 # 
-# 	This is an example of a simple library module.
+# 	dmsdio - SD memory card driver (SDSC/SDHC/SDXC).
+#
+# 	The CMake build is the reference build: it also fetches the headers of
+# 	dmdrvi, dmini, dmosi and dmgpio (dmod_link_modules) and builds
+# 	dmsdio_port and the tests. Pass their include directories through
+# 	DMOD_INC_DIRS when building with make.
 #
 # #############################################################################
 DMOD_DIR=@DMOD_DIR@
@@ -24,7 +29,15 @@ DMOD_MODULE_VERSION=0.1
 DMOD_AUTHOR_NAME=Patryk Kubiak
 
 # The list of C sources
-DMOD_CSOURCES=src/dmsdio.c
+DMOD_CSOURCES=src/dmsdio.c \
+              src/dmsdio_card.c \
+              src/dmsdio_cmd.c \
+              src/dmsdio_config.c \
+              src/dmsdio_decode.c \
+              src/dmsdio_detect.c \
+              src/dmsdio_ident.c \
+              src/dmsdio_io.c \
+              src/dmsdio_xfer.c
 
 # The list of C++ sources
 DMOD_CXXSOURCES=

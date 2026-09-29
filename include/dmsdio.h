@@ -6,46 +6,51 @@
 #include <stddef.h>
 #include "dmod_types.h"
 #include "dmsdio_defs.h"
+#include "dmsdio_types.h"
 
 /**
- * Public API for the dmsdio module.
+ * @file dmsdio.h
+ * @brief Public API of the dmsdio SD memory card driver.
  *
- * Functions are declared with the dmod_dmsdio_api(...) macro - dmod's
- * standard pattern for functions callable from other modules (or from this
- * module's own tests/), resolved dynamically by the loader rather than
- * through normal static linkage. See dm_sw_ring/include/dm_sw_ring.h for a
- * fully worked real-world example of the same shape.
- *
- * Definitions in src/dmsdio.c use the matching
- * dmod_dmsdio_api_declaration(...) macro - a plain C function
- * definition here will NOT satisfy these declarations at link time.
- *
- * This is an example interface using the usual "opaque handle" pattern -
- * replace the handle, functions, and struct definition in
- * src/dmsdio.c with your module's real API.
+ * The device itself is used through the dmdrvi 2.0 interface (a persistent
+ * host node /dev/dmsdioN plus a hot-plugged card node /dev/dmsdioN/0), see
+ * docs/api-reference.md. The functions below are pure register decoders,
+ * shared with the driver itself, that consumers can use to interpret the
+ * raw registers returned by dmsdio_ioctl_cmd_get_card_info.
  */
-
-/* Opaque handle - the real struct is defined in src/dmsdio.c */
-typedef struct dmsdio* dmsdio_t;
 
 /**
- * Create a new dmsdio instance.
+ * @brief Decode a raw CSD register.
  *
- * @return A valid handle on success, or NULL on allocation failure.
+ * @param raw Raw register, most significant word first
+ * @param csd Output
+ *
+ * @return 0 on success, -EINVAL on NULL arguments, -ENOTSUP for an
+ * unsupported CSD structure version (e.g. SDUC), -EPROTO for a CSD whose
+ * fields are inconsistent.
  */
-dmod_dmsdio_api(1.0, dmsdio_t, _create, ( void ));
+dmod_dmsdio_api(1.0, int, _decode_csd, ( const uint32_t raw[4], dmsdio_csd_t* csd ));
 
 /**
- * Destroy an instance created by dmsdio_create(). Safe to call with
- * NULL.
+ * @brief Decode a raw CID register.
+ *
+ * @return 0 on success, -EINVAL on NULL arguments.
  */
-dmod_dmsdio_api(1.0, void, _destroy, ( dmsdio_t handle ));
+dmod_dmsdio_api(1.0, int, _decode_cid, ( const uint32_t raw[4], dmsdio_cid_t* cid ));
 
 /**
- * Example accessor - replace with your module's real API.
+ * @brief Decode the 8-byte SCR as received on the data lines.
  *
- * @return true if handle is a valid, non-NULL instance.
+ * @return 0 on success, -EINVAL on NULL arguments, -EPROTO when the SCR
+ * structure version is unknown or no supported bus width is reported.
  */
-dmod_dmsdio_api(1.0, bool, _is_valid, ( dmsdio_t handle ));
+dmod_dmsdio_api(1.0, int, _decode_scr, ( const uint8_t raw[8], dmsdio_scr_t* scr ));
+
+/**
+ * @brief Decode the 64-byte SD Status as received on the data lines.
+ *
+ * @return 0 on success, -EINVAL on NULL arguments.
+ */
+dmod_dmsdio_api(1.0, int, _decode_ssr, ( const uint8_t raw[64], dmsdio_ssr_t* ssr ));
 
 #endif // DMSDIO_H

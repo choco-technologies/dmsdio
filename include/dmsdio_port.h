@@ -3,31 +3,117 @@
 
 #include "dmod_types.h"
 #include "dmsdio_port_defs.h"
+#include "dmsdio_types.h"
 
-/*
- * Declare architecture-independent port API functions here, following the
- * dmod_dmsdio_port_api(version, return_type, _suffix, (args)) pattern,
- * e.g.:
+/**
+ * @file dmsdio_port.h
+ * @brief Hardware port of the SD host controller.
  *
- *   dmod_dmsdio_port_api(1.0, int, _configure, ( int some_arg ) );
+ * Every function here is a protocol-free hardware primitive. The port knows
+ * how to power the bus, program the clock divider and bus width, clock one
+ * command out, capture the requested response shape and run the attached
+ * data phase. It never decides which command to send, never interprets a
+ * response or card register, and never converts byte offsets to block
+ * addresses - all of that lives in the core dmsdio module.
  *
- * Each declaration here must have a matching *definition* in
- * src/port/<arch>/port.c (or a shared src/port/<arch>_common/ file), written
- * with the dmod_dmsdio_port_api_declaration(...) macro instead:
- *
- *   dmod_dmsdio_port_api_declaration(1.0, int, _configure, ( int some_arg ) )
- *   {
- *       ...
- *   }
- *
- * Note this is a *different* mechanism from the dmod_init()/dmod_deinit()
- * module lifecycle hooks already defined in port.c - don't declare `_init`/
- * `_deinit` here too, that name collides with the lifecycle hooks and (unlike
- * them) requires an explicit dmod_dmsdio_port_api_declaration(...)
- * definition to avoid an undefined-reference link error.
- *
- * See dmfmc/include/dmfmc_port.h and dmfmc/src/port/stm32_common/stm32_common.c
- * for a fully worked example.
+ * Whether a port moves data with an internal IDMA engine, a dmdma lease or
+ * the FIFO is an implementation detail invisible from here. All calls are
+ * made from thread context and serialized per instance by the core module.
  */
+
+/* --- Lifecycle --- */
+
+/**
+ * @brief Acquire and reset the controller (clocks, pins, DMA, IRQ).
+ *
+ * @return 0 on success or a negative errno value; a failure to acquire any
+ * required resource must be reported, never silently degraded.
+ */
+dmod_dmsdio_port_api(1.0, int, _host_init,   ( dmsdio_instance_t instance ));
+
+/** @brief Release everything acquired by _host_init(). */
+dmod_dmsdio_port_api(1.0, int, _host_deinit, ( dmsdio_instance_t instance ));
+
+/* --- Bus configuration --- */
+
+/**
+ * @brief Switch card power (and the bus clock output) on or off.
+ *
+ * After power on the port must keep the clock running so the core can
+ * provide the mandatory 74 initialization clocks by waiting.
+ */
+dmod_dmsdio_port_api(1.0, int, _set_power, ( dmsdio_instance_t instance, bool on ));
+
+/**
+ * @brief Program the highest bus clock not exceeding max_hz.
+ *
+ * @param actual_hz Receives the programmed frequency (may be NULL)
+ *
+ * @return 0 on success, negative errno when no divider can satisfy the
+ * request (e.g. the source clock is unknown).
+ */
+dmod_dmsdio_port_api(1.0, int, _set_clock, ( dmsdio_instance_t instance, uint32_t max_hz, uint32_t* actual_hz ));
+
+/** @brief Select the host side data bus width. */
+dmod_dmsdio_port_api(1.0, int, _set_bus_width, ( dmsdio_instance_t instance, dmsdio_bus_width_t width ));
+
+/* --- Transport --- */
+
+/**
+ * @brief Execute one command and, if data != NULL, its data phase.
+ *
+ * The data path must be armed before the command is sent. The call returns
+ * once the response was captured and the data phase (if any) completed or
+ * failed; completion and errors must be interrupt driven and bounded by
+ * the command timeout and data->timeout_ms respectively.
+ *
+ * CRC checking applies to every response type except
+ * dmsdio_response_short_no_crc. For dmsdio_response_short_busy the port may
+ * return before DAT0 is released - the core polls card status itself.
+ *
+ * @param response Receives the captured response (may be NULL when
+ * command->response is dmsdio_response_none)
+ */
+dmod_dmsdio_port_api(1.0, dmsdio_status_t, _execute,
+    ( dmsdio_instance_t instance, const dmsdio_command_t* command,
+      const dmsdio_data_t* data, dmsdio_response_t* response ));
+
+/**
+ * @brief Abort an interrupted data phase and return the controller to idle.
+ *
+ * Called by the core after any failed _execute() before recovery commands
+ * are sent. Must not touch the card - the core issues STOP itself.
+ */
+dmod_dmsdio_port_api(1.0, void, _abort, ( dmsdio_instance_t instance ));
+
+/* --- Buffers --- */
+
+/**
+ * @brief Allocate a buffer the port can always use for a data phase.
+ *
+ * DMSDIO_TRANSFER_ALIGNMENT aligned, in memory the data path moves at the
+ * full bus clock (e.g. internal SRAM a DMA controller reads fast enough to
+ * keep the host FIFO fed). The core bounces through it whatever
+ * _buffer_is_direct() rejects.
+ *
+ * @return NULL if no such memory is available (the core then falls back to
+ * its own heap).
+ */
+dmod_dmsdio_port_api(1.0, void*, _buffer_alloc, ( dmsdio_instance_t instance, size_t size ));
+
+/** @brief Release a buffer returned by _buffer_alloc(). */
+dmod_dmsdio_port_api(1.0, void, _buffer_free, ( dmsdio_instance_t instance, void* buffer ));
+
+/**
+ * @brief Whether a data phase can move @p length bytes directly from/to @p buffer.
+ *
+ * False when the buffer breaks the port's alignment rules, lies where the
+ * data path cannot reach it, or cannot sustain the bus rate in that
+ * direction (e.g. writes from external SDRAM, which starve the host FIFO at
+ * 48 MHz). _execute() may still accept such a buffer - this is a policy the
+ * core follows to avoid slow or failing transfers, not a hard limit.
+ */
+dmod_dmsdio_port_api(1.0, bool, _buffer_is_direct,
+    ( dmsdio_instance_t instance, const void* buffer, size_t length, dmsdio_direction_t direction ));
 
 #endif // DMSDIO_PORT_H

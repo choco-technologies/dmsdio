@@ -18,6 +18,9 @@ version=./${module}_version.txt => ${destination}/${module}_version.txt [origin=
 # Module documentation in markdown format for dmf-man tool
 docs=./docs => ${destination}/${module}/docs [origin=${repo_dir}/docs]
 
+# Board configurations
+configs=./configs => ${destination}/${module}/configs [origin=${repo_dir}/configs]
+
 # README file
 readme=./README.md => ${destination}/${module}/README.md [origin=${repo_dir}/README.md]
 

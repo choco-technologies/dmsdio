@@ -4,15 +4,26 @@ set(DMOD_AUTHOR_NAME        "Patryk Kubiak")
 set(DMOD_STACK_SIZE         1024)
 set(DMOD_PRIORITY           0)
 
+# The test stands in for dmdevfs: it implements dmdrvi's MAL
+# (dmdrvi_device_available/_unavailable) to observe card hot-plug.
+set(DMOD_MAL_IMPLS          dmdrvi)
+
 dmod_add_test(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     dmsdio_test.c
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    # Control interface of the simulated card (x86_64 dmsdio_port only)
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/port/x86_64
 )
 
-target_link_libraries(${DMOD_MODULE_NAME} dmsdio_if)
+target_link_libraries(${DMOD_MODULE_NAME} dmsdio_if dmsdio_port_if)
+
+dmod_link_modules(${DMOD_MODULE_NAME}
+    dmdrvi@>=2.1
+    dmini
+)
 
 # Register the test module with ctest - this replays the same two steps CI
 # runs (see .github/templates/ci.yml.template): install the test module's
