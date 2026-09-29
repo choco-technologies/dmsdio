@@ -44,14 +44,20 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     ${FAMILY_SOURCES}
 )
 
+# One dmod_link_modules() call: each call rewrites the target's version
+# requirements file.
+# dmdrvi: headers only - dmsdio_types.h numbers the dmsdio ioctls from
+# DMDRVI_IOCTL_CUSTOM_BASE.
 # dmdma 0.4: dmdma_lease_start_ex() (FIFO/burst/flow-controller options)
+set(DMSDIO_PORT_MODULES dmdrvi@>=2.0)
 if(DMOD_CPU_FAMILY MATCHES "^stm32")
-    dmod_link_modules(${DMOD_MODULE_NAME}
+    list(APPEND DMSDIO_PORT_MODULES
         dmclk_port
         dmosi
         dmdma@>=0.4
     )
 endif()
+dmod_link_modules(${DMOD_MODULE_NAME} ${DMSDIO_PORT_MODULES})
 
 target_include_directories(${DMOD_MODULE_NAME} BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/include

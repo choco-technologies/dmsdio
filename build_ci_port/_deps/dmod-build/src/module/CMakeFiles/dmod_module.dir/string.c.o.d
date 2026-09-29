@@ -1,0 +1,4 @@
+_deps/dmod-build/src/module/CMakeFiles/dmod_module.dir/string.c.o: \
+ /__w/dmsdio/dmsdio/build_ci_port/_deps/dmod-src/src/module/string.c \
+ /usr/include/stdc-predef.h \
+ /usr/lib/gcc/x86_64-linux-gnu/9/include/stddef.h

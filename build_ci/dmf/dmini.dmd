@@ -1,0 +1,7 @@
+# DMOD Dependencies File
+# Generated from module: dmini
+# Source file: /__w/dmini/dmini/build_x86_64/dmf/dmini.dmf
+#
+# This file lists all non-system modules required by the module.
+# Use with dmf-get: dmf-get -d /__w/dmini/dmini/build_x86_64/dmf/dmini.dmd
+

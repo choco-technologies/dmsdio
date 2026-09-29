@@ -1,0 +1,100 @@
+[35;1m=== DMOD Test Runner ===[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_decode_scr_and_ssr[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_decode_scr_and_ssr[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_decode_csd_versions[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_decode_csd_versions[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_refresh_follows_removal_and_insertion[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_refresh_follows_removal_and_insertion[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_event_without_card_detect_pin[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_event_without_card_detect_pin[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_card_node_is_not_monitored[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_card_node_is_not_monitored[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_monitor_policy_is_handed_out[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_monitor_policy_is_handed_out[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_create_leaves_the_card_to_the_monitor[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_create_leaves_the_card_to_the_monitor[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_refresh_keeps_present_card[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_refresh_keeps_present_card[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_stale_handle_after_card_swap[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_stale_handle_after_card_swap[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_card_swapped_after_removal_during_transfer[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_card_swapped_after_removal_during_transfer[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_removal_during_transfer[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_removal_during_transfer[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_malformed_response_is_not_retried[0m
+[37;1mdmsdio: [0m[31;1m[ERROR] dmsdio: CMD17 answered with index 18
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_malformed_response_is_not_retried[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_precise_errors_without_retries[0m
+[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-74), attempt 1
+[0m[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-74), attempt 1
+[0m[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-110), attempt 1
+[0m[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-110), attempt 1
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_precise_errors_without_retries[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_retry_exhaustion_returns_eio[0m
+[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-74), attempt 1
+[0m[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-74), attempt 2
+[0m[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-74), attempt 3
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_retry_exhaustion_returns_eio[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_multi_block_write_retry_restores_transfer_state[0m
+[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-110), attempt 1
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_multi_block_write_retry_restores_transfer_state[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_transient_crc_is_recovered_by_retry[0m
+[37;1mdmsdio: [0m[33;1m[WARN] dmsdio: transfer at block 0 failed (-74), attempt 1
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_transient_crc_is_recovered_by_retry[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_write_protected_card[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_write_protected_card[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_erase_and_discard[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_erase_and_discard[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_argument_validation[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_argument_validation[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_end_of_device[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_end_of_device[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_sdsc_uses_byte_addresses[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_sdsc_uses_byte_addresses[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_offsets_above_4gib_are_not_truncated[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_offsets_above_4gib_are_not_truncated[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_unaligned_read_spanning_blocks[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_unaligned_read_spanning_blocks[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_unaligned_write_preserves_neighbours[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_unaligned_write_preserves_neighbours[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_large_request_is_split[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_large_request_is_split[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_full_sector_round_trip_uses_multi_block[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_full_sector_round_trip_uses_multi_block[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_rejects_invalid_configuration[0m
+[37;1mdmsdio: [0m[31;1m[ERROR] dmsdio: invalid instance/bus configuration in [dmsdio]
+[0m[37;1mdmsdio: [0m[31;1m[ERROR] dmsdio: host 7 initialization failed (-19)
+[0m[37;1mdmsdio: [0m[31;1m[ERROR] dmsdio: monitor_event_handler longer than 31 characters
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_rejects_invalid_configuration[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_reads_active_board_section[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_reads_active_board_section[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_malformed_identification_response_is_eproto[0m
+[37;1mdmsdio: [0m[31;1m[ERROR] dmsdio: CMD8 answered with index 9
+[0m[37;1mdmsdio: [0m[31;1m[ERROR] dmsdio0: card identification failed (-71)
+[0m[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_malformed_identification_response_is_eproto[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_no_card_is_reported[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_no_card_is_reported[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_clock_limit_is_respected[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_clock_limit_is_respected[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_default_speed_when_high_speed_refused[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_default_speed_when_high_speed_refused[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_one_bit_bus_when_configured[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_one_bit_bus_when_configured[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_identifies_sdxc_with_full_64bit_capacity[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_identifies_sdxc_with_full_64bit_capacity[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_identifies_sdhc[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_identifies_sdhc[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_identifies_sdsc_v2[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_identifies_sdsc_v2[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_identifies_sdsc_v1[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_identifies_sdsc_v1[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_identification_retries_transient_errors[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_identification_retries_transient_errors[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_card_node_waits_for_host_registration[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_card_node_waits_for_host_registration[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_announces_card_node[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_announces_card_node[0m
+[37;1m[ [34;1mRUN  [37;1m] [35;1mdmsdio_driver_is_discoverable_through_dmdrvi[0m
+[37;1m[[32;1m  OK  [37;1m] [0m[37mdmsdio_driver_is_discoverable_through_dmdrvi[0m
+
+=== Results: 41/41 passed ===

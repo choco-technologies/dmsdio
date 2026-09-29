@@ -77,11 +77,13 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
 
 # dmdrvi 2.1: the host node implements the monitor ioctls (presence is
 # monitored by dmdevfs' dmdevmon service, see docs/api-reference.md).
+# dmgpio 2.0: its ioctls start at DMDRVI_IOCTL_CUSTOM_BASE - the card detect
+# read (dmgpio_ioctl_cmd_get_high/low_pins_state) has other values in 1.x.
 dmod_link_modules(${DMOD_MODULE_NAME}
     dmdrvi@>=2.1
     dmini
     dmosi
-    dmgpio
+    dmgpio@>=2.0
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE

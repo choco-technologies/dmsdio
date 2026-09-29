@@ -1,0 +1,7 @@
+# DMOD Dependencies File
+# Generated from module: dmsdio_port
+# Source file: /__w/dmsdio/dmsdio/build_ci_port/dmf/dmsdio_port.dmf
+#
+# This file lists all non-system modules required by the module.
+# Use with dmf-get: dmf-get -d /__w/dmsdio/dmsdio/build_ci_port/dmf/dmsdio_port.dmd
+
