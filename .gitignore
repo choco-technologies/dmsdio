@@ -13,3 +13,6 @@ build/
 *.tmp
 *.swp
 *~
+
+# Local CI builds
+build_*/
