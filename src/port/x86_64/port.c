@@ -87,6 +87,14 @@ dmod_dmsdio_port_api_declaration(1.0, int, _host_deinit, ( dmsdio_instance_t ins
     return 0;
 }
 
+/* The pads are fixed (STM32: AF of dmgpio devices) / simulated: nothing to route */
+dmod_dmsdio_port_api_declaration(1.0, int, _set_pins,
+    ( dmsdio_instance_t instance, int clk_pin, int cmd_pin, int d0_pin, int d1_pin, int d2_pin, int d3_pin ))
+{
+    (void)instance; (void)clk_pin; (void)cmd_pin; (void)d0_pin; (void)d1_pin; (void)d2_pin; (void)d3_pin;
+    return -ENOTSUP;
+}
+
 dmod_dmsdio_port_api_declaration(1.0, int, _set_power, ( dmsdio_instance_t instance, bool on ))
 {
     mock_host_t* host = get_ready_host(instance);

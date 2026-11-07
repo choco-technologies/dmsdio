@@ -476,6 +476,19 @@ DMOD_TEST_STEP(dmsdio_rejects_invalid_configuration)
                             "monitor_event_handler=a_handler_name_longer_than_31_chars\n");
     DMOD_TEST_EXPECT_NULL(g_drv.create(ini, &num));
     dmini_destroy(ini);
+
+    /* Pads for a controller whose pads are fixed (the simulated one, like the STM32 ones): the port refuses them (-ENOTSUP) and the host
+     * it took is released again - a context with correct keys can be created right after */
+    ini = dmini_create();
+    dmini_parse_string(ini, "[dmsdio]\ninstance=1\nclk_pin=14\ncmd_pin=17\nd0_pin=16\n");
+    DMOD_TEST_EXPECT_NULL(g_drv.create(ini, &num));
+    dmini_destroy(ini);
+    ini = dmini_create();
+    dmini_parse_string(ini, "[dmsdio]\ninstance=1\npoll_interval_ms=0\n");
+    dmdrvi_context_t ctx = g_drv.create(ini, &num);
+    DMOD_TEST_EXPECT_NOT_NULL(ctx);
+    g_drv.free(ctx);
+    dmini_destroy(ini);
 }
 
 /* ======================================================================

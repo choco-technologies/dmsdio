@@ -22,6 +22,7 @@ Declared in [`include/dmsdio_port.h`](../include/dmsdio_port.h):
 |----------|----------|
 | `_host_init(instance)` | Acquire clocks, pins, DMA and IRQs and reset the controller. Any failed resource acquisition is returned as an error, never silently degraded |
 | `_host_deinit(instance)` | Release everything acquired by `_host_init` |
+| `_set_pins(instance, clk, cmd, d0, d1, d2, d3)` | Route the bus signals to pads, for the chips that route them freely (`clk_pin`, `cmd_pin`, `d0_pin`..`d3_pin` of the configuration; -1: not given). Called after `_host_init` and only when a pad is given. A port with fixed pads (STM32: dmgpio devices of the friends group) returns `-ENOTSUP` |
 | `_set_power(instance, on)` | Card power and clock output. After power-on the clock must run so the core's wait provides the 74 initialization clocks |
 | `_set_clock(instance, max_hz, &actual_hz)` | Program the highest clock not above `max_hz` and report it. The core rejects an identification clock above 400 kHz |
 | `_set_bus_width(instance, width)` | Host side data bus width (1 or 4) |
@@ -74,6 +75,7 @@ buffer from `_buffer_alloc()`.
 |--------|--------|
 | `stm32f4` | SDIO (RM0090 section 31), one instance. Thin wrapper over `stm32_common` |
 | `stm32f7` | SDMMC1, RM0385/RM0410 section 35. Thin wrapper over `stm32_common`. SDMMC2 (F76x/F77x only) is not registered: packages are per family and its IRQ 103 does not exist on F74x/F75x |
+| `esp32s3` | The SD/MMC host (SDHOST), slot 0 = instance 1: the command by the CMD register and the interrupt, the data by the internal DMA of the host (the buffers have to be in the internal RAM: the PSRAM is bounced), the pads through the GPIO matrix (`_set_pins`), the clock 400 kHz..40 MHz from the 160 MHz of the PLL. The card detect is not wired to the host. See [the ESP32-S3 section](#esp32-s3-sdhost) |
 | `x86_64` | Simulated SD card for the automated tests (`dmsdio_mock.h`: card types SDSC v1/v2, SDHC, SDXC, fault injection, removal, counters). Never released - CI and the release workflow exclude it from the hardware matrix |
 
 ### STM32 (`src/port/stm32_common`)
@@ -132,3 +134,22 @@ Implementation notes:
   Requires dmdma with `dmdma_lease_start_ex()` (stream options).
 * Pins (AF12, pull-ups on CMD/D0-D3) are configured by dmgpio from the board
   files in [`configs/`](../configs/README.md), not by the port.
+
+### ESP32-S3 (SDHOST)
+
+`src/port/esp32s3/port.c`, registers in `esp32s3_sdmmc.h` (ESP32-S3 Technical Reference Manual, SD/MMC Host Controller; the names follow
+`soc/sdmmc_reg.h` of ESP-IDF).
+
+* **Pads.** There are no fixed pads: the signals go through the GPIO matrix (`clk_pin`, `cmd_pin`, `d0_pin`; `d1_pin`, `d2_pin`, `d3_pin`
+  make a 4-bit bus possible). `d3_pin` is also the line the port holds high on a 1-bit bus: D3 is the CS of the SPI mode of a card, and a
+  card that sees it low at its first command goes to the SPI mode and no longer answers in the SD mode until its power is cut. It is
+  the port's job (ESP-IDF does the same) - not a dmgpio friend's: dmgpio has no initial level of an output.
+* **Pull-ups.** The weak internal pull-ups of the command and data pads are on (the lines of an SD bus idle high; the board has its own, the
+  internal ones help a board without).
+* **Clock.** The 160 MHz of the PLL divided by the host divider (2..16) and the card divider (`2 * n`, or none): 400 kHz for the
+  identification, then the highest one not above the request, 40 MHz at most.
+* **Interrupt.** Source 30 of the interrupt matrix (SDIO_HOST, level), CPU line 18. The handler gathers the flags of `RINTSTS` and `IDSTS`
+  and posts a semaphore; every wait of `_execute` is bounded.
+* **Data.** The internal DMA of the host (IDMAC): a chain of descriptors (4096 bytes each, in the `dma` heap) on the buffer of the core, which has
+  to be in the internal RAM (`_buffer_is_direct`); the PSRAM is not reached by it and goes through the bounce buffer of `_buffer_alloc`.
+* **Not wired to the host:** the card detect and the write protect (the core looks for a card at its periodic scans).

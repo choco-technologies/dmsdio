@@ -51,7 +51,13 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
 # dmdma 0.4: dmdma_lease_start_ex() (FIFO/burst/flow-controller options)
 # dmheap: bounce buffers from dmod-boot's "dma" heap (internal SRAM).
 set(DMSDIO_PORT_MODULES dmdrvi@>=2.0)
-if(DMOD_CPU_FAMILY MATCHES "^stm32")
+if(DMOD_CPU_FAMILY STREQUAL "esp32s3")
+    # The SD/MMC host of the chip has its own DMA (no dmdma, no dmclk): the semaphore and the sleeps of dmosi, the buffers of the dma heap
+    list(APPEND DMSDIO_PORT_MODULES
+        dmosi
+        dmheap
+    )
+elseif(DMOD_CPU_FAMILY MATCHES "^stm32")
     list(APPEND DMSDIO_PORT_MODULES
         dmclk_port
         dmosi

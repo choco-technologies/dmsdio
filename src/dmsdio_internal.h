@@ -40,6 +40,12 @@ typedef struct
     uint32_t            erase_timeout_ms;       /**< Minimum erase busy limit */
     uint32_t            max_blocks_per_transfer;/**< Split larger requests */
     uint32_t            bounce_blocks;          /**< Size of the bounce buffer in blocks */
+    int                 clk_pin;                /**< Pads for the chips that route the signals freely (-1: not given) */
+    int                 cmd_pin;
+    int                 d0_pin;
+    int                 d1_pin;
+    int                 d2_pin;
+    int                 d3_pin;
     bool                cd_active_high;         /**< Card detect polarity */
     /* Presence monitoring policy - not used by the driver itself, handed to
      * the monitor service through DMDRVI_IOCTL_MONITOR_GET_POLICY. */
