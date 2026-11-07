@@ -160,6 +160,18 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_context_t, _create,
         destroy_context(ctx, false);
         return NULL;
     }
+    const dmsdio_config_t* c = &ctx->config;
+    if (c->clk_pin >= 0 || c->cmd_pin >= 0 || c->d0_pin >= 0 || c->d1_pin >= 0 || c->d2_pin >= 0 || c->d3_pin >= 0)
+    {
+        ret = dmsdio_port_set_pins(c->instance, c->clk_pin, c->cmd_pin, c->d0_pin, c->d1_pin, c->d2_pin, c->d3_pin);
+        if (ret != 0)
+        {
+            DMOD_LOG_ERROR("dmsdio: host %u: clk_pin=%d cmd_pin=%d d0_pin=%d d1_pin=%d d2_pin=%d d3_pin=%d refused (%d)\n",
+                           (unsigned)c->instance, c->clk_pin, c->cmd_pin, c->d0_pin, c->d1_pin, c->d2_pin, c->d3_pin, ret);
+            destroy_context(ctx, true);
+            return NULL;
+        }
+    }
 
     memset(dev_num, 0, sizeof(*dev_num));
     dev_num->flags = DMDRVI_NUM_MAJOR;

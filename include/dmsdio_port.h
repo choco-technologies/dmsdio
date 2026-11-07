@@ -34,6 +34,18 @@ dmod_dmsdio_port_api(1.0, int, _host_init,   ( dmsdio_instance_t instance ));
 /** @brief Release everything acquired by _host_init(). */
 dmod_dmsdio_port_api(1.0, int, _host_deinit, ( dmsdio_instance_t instance ));
 
+/**
+ * @brief Route the bus signals to pads, for the chips that route them freely.
+ *
+ * Called after _host_init() when the configuration names a pad (clk_pin, cmd_pin, d0_pin..d3_pin; -1: not given - e.g. d1..d3 on a
+ * 1-bit bus). A port whose controller has fixed pads (the STM32 ones, set up as dmgpio devices of the friends group) returns -ENOTSUP;
+ * the core does not call it when no pad is given.
+ *
+ * @return 0 on success, -ENOTSUP when the pads are not the port's business, another negative errno when a pad is refused.
+ */
+dmod_dmsdio_port_api(1.0, int, _set_pins,
+    ( dmsdio_instance_t instance, int clk_pin, int cmd_pin, int d0_pin, int d1_pin, int d2_pin, int d3_pin ));
+
 /* --- Bus configuration --- */
 
 /**

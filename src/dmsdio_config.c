@@ -91,6 +91,12 @@ static int read_bus(dmini_context_t ini, const char* section, dmsdio_config_t* c
     c->high_speed   = read_bool(ini, section, "high_speed", true);
     c->max_blocks_per_transfer = read_u32(ini, section, "max_blocks_per_transfer", DEFAULT_MAX_BLOCKS);
     c->bounce_blocks = read_u32(ini, section, "bounce_blocks", DEFAULT_BOUNCE_BLOCKS);
+    c->clk_pin = dmini_get_int(ini, section, "clk_pin", -1);
+    c->cmd_pin = dmini_get_int(ini, section, "cmd_pin", -1);
+    c->d0_pin  = dmini_get_int(ini, section, "d0_pin", -1);
+    c->d1_pin  = dmini_get_int(ini, section, "d1_pin", -1);
+    c->d2_pin  = dmini_get_int(ini, section, "d2_pin", -1);
+    c->d3_pin  = dmini_get_int(ini, section, "d3_pin", -1);
 
     if (instance < 1 || instance > 255 || (width != 1 && width != 4) ||
         c->max_clock_hz < 400000u || c->max_blocks_per_transfer == 0 || c->bounce_blocks == 0)
