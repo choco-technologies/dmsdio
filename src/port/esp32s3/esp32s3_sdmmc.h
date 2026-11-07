@@ -124,6 +124,7 @@
 #define ESP32S3_GPIO_CONST_ZERO_INPUT   0x3CUL
 #define ESP32S3_IO_MUX_REG(pad)         (0x60009004UL + 4UL * (pad))
 #define ESP32S3_IO_MUX_IE               (1UL << 9)
+#define ESP32S3_IO_MUX_WPU              (1UL << 8)
 #define ESP32S3_IO_MUX_MCU_SEL_S        12U
 #define ESP32S3_IO_MUX_MCU_SEL_M        (7UL << ESP32S3_IO_MUX_MCU_SEL_S)
 #define ESP32S3_IO_MUX_FUNC_GPIO        1UL

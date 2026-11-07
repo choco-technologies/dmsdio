@@ -126,6 +126,7 @@ static void route_bidirectional(int pad, uint32_t signal)
 {
     route_output(pad, signal);
     route_input(pad, signal);
+    *reg(ESP32S3_IO_MUX_REG((uint32_t)pad)) |= ESP32S3_IO_MUX_WPU;              /* the lines of an SD bus idle high (the weak pull-up helps a bus without its own) */
 }
 
 /* D3 is the CS of the SPI mode of a card: low at the first command it would take the card there. Held high as a plain output until a 4-bit

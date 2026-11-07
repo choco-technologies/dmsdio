@@ -144,6 +144,8 @@ Implementation notes:
   make a 4-bit bus possible). `d3_pin` is also the line the port holds high on a 1-bit bus: D3 is the CS of the SPI mode of a card, and a
   card that sees it low at its first command goes to the SPI mode and no longer answers in the SD mode until its power is cut. It is
   the port's job (ESP-IDF does the same) - not a dmgpio friend's: dmgpio has no initial level of an output.
+* **Pull-ups.** The weak internal pull-ups of the command and data pads are on (the lines of an SD bus idle high; the board has its own, the
+  internal ones help a board without).
 * **Clock.** The 160 MHz of the PLL divided by the host divider (2..16) and the card divider (`2 * n`, or none): 400 kHz for the
   identification, then the highest one not above the request, 40 MHz at most.
 * **Interrupt.** Source 30 of the interrupt matrix (SDIO_HOST, level), CPU line 18. The handler gathers the flags of `RINTSTS` and `IDSTS`

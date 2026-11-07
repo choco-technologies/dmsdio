@@ -91,7 +91,18 @@ int main(int argc, char *argv[])
 
     char node[64];
     Dmod_SnPrintf(node, sizeof(node), "%s/0", argv[1]);
-    void *card = Dmod_FileOpen(node, "r");              /* reading only: a write on this handle is -EBADF */
+    /* The node of the card appears when dmdevfs has registered it, a moment after the host reported the card */
+    void *card = NULL;
+    for (unsigned attempt = 0; attempt < 50 && card == NULL; attempt++)
+    {
+        card = Dmod_FileOpen(node, "r");                /* reading only: a write on this handle is -EBADF */
+        if (card == NULL)
+        {
+            unsigned wait = now_ms();
+            while (now_ms() - wait < 100)
+                ;
+        }
+    }
     if (card == NULL)
     {
         Dmod_Printf("sdtest: cannot open '%s'\n", node);
