@@ -70,8 +70,10 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     src/dmsdio_config.c
     src/dmsdio_decode.c
     src/dmsdio_detect.c
+    src/dmsdio_host.c
     src/dmsdio_ident.c
     src/dmsdio_io.c
+    src/dmsdio_spi.c
     src/dmsdio_xfer.c
 )
 
@@ -84,6 +86,7 @@ dmod_link_modules(${DMOD_MODULE_NAME}
     dmini
     dmosi
     dmgpio@>=1.1
+    dmspi
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE

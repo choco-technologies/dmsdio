@@ -8,6 +8,7 @@
 #include "dmini.h"
 #include "dmosi.h"
 #include "dmgpio_types.h"
+#include "dmspi_types.h"
 #include <errno.h>
 
 /*
@@ -46,6 +47,7 @@ typedef struct
     int                 d1_pin;
     int                 d2_pin;
     int                 d3_pin;
+    bool                spi_mode;               /**< The card is on an SPI bus (bus=spi): the transport is dmsdio_spi.c, not the port */
     bool                cd_active_high;         /**< Card detect polarity */
     /* Presence monitoring policy - not used by the driver itself, handed to
      * the monitor service through DMDRVI_IOCTL_MONITOR_GET_POLICY. */
@@ -73,6 +75,13 @@ struct dmdrvi_context
     uint32_t            announced_generation; /**< Card generation the announcement is for */
     dmosi_mutex_t       cd_lock;        /**< Guards cd_path (never held across bus work) */
     char*               cd_path;        /**< Card detect GPIO node, NULL = none */
+    /* The SPI mode (config.spi_mode): the friends of dmdevfs and the state of the transport, see dmsdio_spi.c */
+    char*               spi_path;       /**< dmspi node of the bus (friend_role spi) */
+    char*               spi_cs_path;    /**< dmgpio output of the chip select of the card (friend_role sd_cs) */
+    void*               spi_file;       /**< spi_path opened, kept */
+    uint32_t            spi_hz;         /**< Clock of the card's transfers */
+    uint8_t*            spi_scratch;    /**< One block and its framing, internal RAM (dmsdio_spi.c) */
+    bool                spi_multi_write;/**< A CMD25 is open: the stop is a token, not a CMD12 */
 };
 
 /** Open file handle - pins the card generation it was opened for. */
@@ -98,6 +107,26 @@ int  dmsdio_cmd_data(struct dmdrvi_context* ctx, bool app, uint8_t index, uint32
 int  dmsdio_cmd_status(struct dmdrvi_context* ctx, uint32_t* status);
 int  dmsdio_cmd_wait_ready(struct dmdrvi_context* ctx, uint32_t timeout_ms);
 int  dmsdio_cmd_stop(struct dmdrvi_context* ctx);
+
+/* --- dmsdio_host.c: the transport of the commands - the port (SDIO) or dmsdio_spi.c (bus=spi) --- */
+int  dmsdio_host_set_power(struct dmdrvi_context* ctx, bool on);
+int  dmsdio_host_set_bus_width(struct dmdrvi_context* ctx, dmsdio_bus_width_t width);
+int  dmsdio_host_set_clock(struct dmdrvi_context* ctx, uint32_t max_hz, uint32_t* actual_hz);
+dmsdio_status_t dmsdio_host_execute(struct dmdrvi_context* ctx, const dmsdio_command_t* cmd,
+                                    const dmsdio_data_t* data, dmsdio_response_t* resp);
+void dmsdio_host_abort(struct dmdrvi_context* ctx);
+void* dmsdio_host_buffer_alloc(struct dmdrvi_context* ctx, size_t size);
+void dmsdio_host_buffer_free(struct dmdrvi_context* ctx, void* buffer);
+bool dmsdio_host_buffer_is_direct(const struct dmdrvi_context* ctx, const void* buffer, size_t length, dmsdio_direction_t direction);
+
+/* --- dmsdio_spi.c: an SD card on an SPI bus (bus=spi) --- */
+int  dmsdio_spi_set_power(struct dmdrvi_context* ctx, bool on);
+int  dmsdio_spi_set_clock(struct dmdrvi_context* ctx, uint32_t max_hz, uint32_t* actual_hz);
+dmsdio_status_t dmsdio_spi_execute(struct dmdrvi_context* ctx, const dmsdio_command_t* cmd,
+                                   const dmsdio_data_t* data, dmsdio_response_t* resp);
+void dmsdio_spi_friend(struct dmdrvi_context* ctx, const char* role, const char* path);
+void dmsdio_spi_release(struct dmdrvi_context* ctx);
+bool dmsdio_spi_friends_there(const struct dmdrvi_context* ctx);
 
 /* --- dmsdio_ident.c: identification and bus negotiation --- */
 int  dmsdio_ident_run(struct dmdrvi_context* ctx, dmsdio_card_info_t* card);
