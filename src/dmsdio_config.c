@@ -98,6 +98,18 @@ static int read_bus(dmini_context_t ini, const char* section, dmsdio_config_t* c
     c->d2_pin  = dmini_get_int(ini, section, "d2_pin", -1);
     c->d3_pin  = dmini_get_int(ini, section, "d3_pin", -1);
 
+    const char* bus = dmini_get_string(ini, section, "bus", "sdio");
+    if (strcmp(bus, "spi") == 0)
+    {
+        c->spi_mode = true;
+        width = 1;      /* one data line: the SPI mode has no wider bus */
+    }
+    else if (strcmp(bus, "sdio") != 0)
+    {
+        DMOD_LOG_ERROR("dmsdio: bus must be sdio or spi in [%s]\n", label(section));
+        return -EINVAL;
+    }
+
     if (instance < 1 || instance > 255 || (width != 1 && width != 4) ||
         c->max_clock_hz < 400000u || c->max_blocks_per_transfer == 0 || c->bounce_blocks == 0)
     {

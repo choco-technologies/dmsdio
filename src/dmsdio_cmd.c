@@ -63,7 +63,7 @@ static bool has_index_field(dmsdio_response_type_t type)
 static int execute(struct dmdrvi_context* ctx, const dmsdio_command_t* cmd,
                    const dmsdio_data_t* data, dmsdio_response_t* resp)
 {
-    dmsdio_status_t status = dmsdio_port_execute(ctx->config.instance, cmd, data, resp);
+    dmsdio_status_t status = dmsdio_host_execute(ctx, cmd, data, resp);
     int ret = dmsdio_cmd_errno(status);
     if (ret == 0 && has_index_field(cmd->response) && resp->index != cmd->index)
     {
@@ -72,7 +72,7 @@ static int execute(struct dmdrvi_context* ctx, const dmsdio_command_t* cmd,
     }
     if (ret != 0)
     {
-        dmsdio_port_abort(ctx->config.instance);
+        dmsdio_host_abort(ctx);
         ctx->last_error = ret;
     }
     return ret;

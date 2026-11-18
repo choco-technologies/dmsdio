@@ -91,7 +91,7 @@ static int attach(struct dmdrvi_context* ctx)
     }
     if (ret != 0)
     {
-        dmsdio_port_set_power(ctx->config.instance, false);
+        dmsdio_host_set_power(ctx, false);
         /* An empty slot is not an error - keep the last real one. */
         ctx->last_error = (ret == -ENODEV) ? previous_error : ret;
         if (ret != -ENODEV)
@@ -120,7 +120,7 @@ void dmsdio_card_detach(struct dmdrvi_context* ctx)
     }
     memset(&ctx->card, 0, sizeof(ctx->card));
     ctx->generation++;
-    dmsdio_port_set_power(ctx->config.instance, false);
+    dmsdio_host_set_power(ctx, false);
     DMOD_LOG_INFO("dmsdio%u: card removed\n", (unsigned)ctx->config.major);
 }
 
