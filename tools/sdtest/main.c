@@ -131,6 +131,82 @@ static int fs_test(const char *path, unsigned kib)
     return bad != 0;
 }
 
+
+/* Raw writes to the card (it is overwritten: only for a card with nothing on it): one sector (CMD24), 16 sectors (CMD25), a partial sector
+ * (read-modify-write) and 256 KiB, each read back; at `mib` MiB from the start of the card. */
+static int fill(uint8_t *b, uint32_t n, uint32_t seed)
+{
+    for (uint32_t i = 0; i < n; i += 4)
+    {
+        uint32_t w = pattern_word(seed + i / 4U);
+        b[i] = (uint8_t)w; b[i + 1] = (uint8_t)(w >> 8); b[i + 2] = (uint8_t)(w >> 16); b[i + 3] = (uint8_t)(w >> 24);
+    }
+    return 0;
+}
+
+static int raw_step(void *card, const char *name, uint64_t offset, uint32_t size, uint32_t seed)
+{
+    static uint8_t out[8192], in[8192];
+    unsigned bad = 0;
+    unsigned start = now_ms();
+    for (uint32_t done = 0; done < size; done += sizeof(out))
+    {
+        uint32_t chunk = size - done < sizeof(out) ? size - done : (uint32_t)sizeof(out);
+        fill(out, chunk, seed + done / 4U);
+        Dmod_FileSeek(card, (Dmod_FileOffset_t)(offset + done), DMOD_SEEK_SET);
+        if (Dmod_FileWrite(out, 1, chunk, card) != chunk)
+        {
+            Dmod_Printf("  %s: write of %u at %u failed\n", name, (unsigned)chunk, (unsigned)done);
+            return 1;
+        }
+    }
+    unsigned write_ms = now_ms() - start;
+    start = now_ms();
+    for (uint32_t done = 0; done < size; done += sizeof(out))
+    {
+        uint32_t chunk = size - done < sizeof(out) ? size - done : (uint32_t)sizeof(out);
+        fill(out, chunk, seed + done / 4U);
+        Dmod_FileSeek(card, (Dmod_FileOffset_t)(offset + done), DMOD_SEEK_SET);
+        if (Dmod_FileRead(in, 1, chunk, card) != chunk)
+        {
+            Dmod_Printf("  %s: read of %u at %u failed\n", name, (unsigned)chunk, (unsigned)done);
+            return 1;
+        }
+        if (memcmp(in, out, chunk) != 0)
+            bad++;
+    }
+    unsigned read_ms = now_ms() - start;
+    Dmod_Printf("  %s: %u bytes, write %u ms, read %u ms, %s\n", name, (unsigned)size, write_ms, read_ms, bad == 0 ? "OK" : "MISMATCH");
+    return bad != 0;
+}
+
+static int raw_test(void *card, unsigned mib)
+{
+    uint64_t base = (uint64_t)mib << 20;
+    static uint8_t keep[SECTOR], after[SECTOR], patch[100];
+    int failed = 0;
+    Dmod_Printf("raw write test at %u MiB\n", mib);
+    failed += raw_step(card, "1 sector (CMD24)", base, SECTOR, 1U);
+    failed += raw_step(card, "16 sectors (CMD25)", base + 0x10000, 16U * SECTOR, 2U);
+    failed += raw_step(card, "256 KiB", base + 0x100000, 256U << 10, 3U);
+
+    /* a partial sector: the bytes around it must stay */
+    uint64_t at = base + 0x20000;
+    fill(keep, SECTOR, 77U);
+    Dmod_FileSeek(card, (Dmod_FileOffset_t)at, DMOD_SEEK_SET);
+    Dmod_FileWrite(keep, 1, SECTOR, card);
+    fill(patch, sizeof(patch), 99U);
+    Dmod_FileSeek(card, (Dmod_FileOffset_t)(at + 300), DMOD_SEEK_SET);
+    size_t w = Dmod_FileWrite(patch, 1, sizeof(patch), card);
+    memcpy(keep + 300, patch, sizeof(patch));
+    Dmod_FileSeek(card, (Dmod_FileOffset_t)at, DMOD_SEEK_SET);
+    size_t r = Dmod_FileRead(after, 1, SECTOR, card);
+    int ok = w == sizeof(patch) && r == SECTOR && memcmp(keep, after, SECTOR) == 0;
+    Dmod_Printf("  partial sector (read-modify-write): %s\n", ok ? "OK" : "MISMATCH");
+    failed += !ok;
+    return failed;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2)
@@ -165,6 +241,15 @@ int main(int argc, char *argv[])
         for (const char *p = argv[2]; *p >= '0' && *p <= '9'; p++)
             mib = mib * 10 + (unsigned)(*p - '0');
 
+    unsigned raw_mib = 0;
+    if (argc > 3 && strcmp(argv[2], "--raw") == 0)
+    {
+        mib = 0;
+        for (const char *p = argv[3]; *p >= '0' && *p <= '9'; p++)
+            raw_mib = raw_mib * 10 + (unsigned)(*p - '0');
+        if (raw_mib == 0)
+            raw_mib = 1;
+    }
     int ret = Dmod_Ioctl(host, DMDRVI_IOCTL_MONITOR_REFRESH, NULL);
     Dmod_Printf("look for a card: %d%s\n", ret, ret == 0 ? "" : (ret == -19 ? " (no card)" : " (failed)"));
     dmsdio_host_info_t hi;
@@ -206,6 +291,22 @@ int main(int argc, char *argv[])
         Dmod_Printf("sdtest: cannot open '%s'\n", node);
         Dmod_FileClose(host);
         return 1;
+    }
+    if (raw_mib != 0)
+    {
+        Dmod_FileClose(card);
+        card = Dmod_FileOpen(node, "r+");
+        if (card == NULL)
+        {
+            Dmod_Printf("sdtest: cannot open '%s' for writing\n", node);
+            Dmod_FileClose(host);
+            return 1;
+        }
+        int bad = raw_test(card, raw_mib);
+        Dmod_Printf("sdtest: %s\n", bad == 0 ? "done" : "FAILED");
+        Dmod_FileClose(card);
+        Dmod_FileClose(host);
+        return bad != 0;
     }
     static uint8_t buffer[CHUNK];
     if (Dmod_FileRead(buffer, 1, SECTOR, card) != SECTOR)
