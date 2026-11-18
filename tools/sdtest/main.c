@@ -25,6 +25,9 @@ static uint32_t le32(const uint8_t *p)
 
 static void show_sector0(const uint8_t *s)
 {
+    Dmod_Printf("sector 0 starts:");
+    for (int i = 0; i < 32; i++) Dmod_Printf(" %02x", s[i]);
+    Dmod_Printf("\n");
     Dmod_Printf("sector 0: signature %02x%02x, OEM '%.8s'\n", s[511], s[510], (const char *)&s[3]);
     if (s[510] != 0x55 || s[511] != 0xAA)
     {
@@ -49,12 +52,107 @@ static unsigned now_ms(void)
     return (unsigned)Dmod_GetUptime();
 }
 
+/* A test of the writes through a file system (the card mounted): one NEW file with a known pattern, written, closed, opened again and
+ * compared. It never opens an existing file for writing (the open fails when the file is there) and removes nothing. */
+static uint32_t pattern_word(uint32_t index)
+{
+    uint32_t x = index * 2654435761U + 0x9E3779B9U;
+    x ^= x >> 15;
+    x *= 2246822519U;
+    x ^= x >> 13;
+    return x;
+}
+
+static int fs_test(const char *path, unsigned kib)
+{
+    static uint8_t buffer[8192];
+    uint32_t total = kib << 10;
+    uint32_t done;
+
+    void *probe = Dmod_FileOpen(path, "rb");
+    if (probe != NULL)
+    {
+        Dmod_FileClose(probe);
+        Dmod_Printf("sdtest: '%s' exists - not touching it, pick another name\n", path);
+        return 1;
+    }
+    void *file = Dmod_FileOpen(path, "wb");
+    if (file == NULL)
+    {
+        Dmod_Printf("sdtest: cannot create '%s'\n", path);
+        return 1;
+    }
+    unsigned start = now_ms();
+    for (done = 0; done < total; done += sizeof(buffer))
+    {
+        uint32_t chunk = total - done < sizeof(buffer) ? total - done : (uint32_t)sizeof(buffer);
+        for (uint32_t i = 0; i < chunk; i += 4)
+        {
+            uint32_t w = pattern_word((done + i) / 4U);
+            buffer[i] = (uint8_t)w; buffer[i + 1] = (uint8_t)(w >> 8); buffer[i + 2] = (uint8_t)(w >> 16); buffer[i + 3] = (uint8_t)(w >> 24);
+        }
+        if (Dmod_FileWrite(buffer, 1, chunk, file) != chunk)
+        {
+            Dmod_Printf("sdtest: write of %u bytes at %u failed\n", (unsigned)chunk, (unsigned)done);
+            Dmod_FileClose(file);
+            return 1;
+        }
+    }
+    Dmod_FileClose(file);
+    unsigned write_ms = now_ms() - start;
+    Dmod_Printf("wrote %u KiB to %s in %u ms: %u KiB/s\n", kib, path, write_ms, write_ms != 0 ? kib * 1000U / write_ms : 0U);
+
+    file = Dmod_FileOpen(path, "rb");
+    if (file == NULL)
+    {
+        Dmod_Printf("sdtest: cannot open '%s' again\n", path);
+        return 1;
+    }
+    if (Dmod_FileSize(file) != total)
+        Dmod_Printf("sdtest: the size is %u, not %u\n", (unsigned)Dmod_FileSize(file), (unsigned)total);
+    unsigned bad = 0;
+    start = now_ms();
+    for (done = 0; done < total; done += sizeof(buffer))
+    {
+        uint32_t chunk = total - done < sizeof(buffer) ? total - done : (uint32_t)sizeof(buffer);
+        if (Dmod_FileRead(buffer, 1, chunk, file) != chunk)
+        {
+            Dmod_Printf("sdtest: read of %u bytes at %u failed\n", (unsigned)chunk, (unsigned)done);
+            bad++;
+            break;
+        }
+        for (uint32_t i = 0; i < chunk; i += 4)
+            if (le32(&buffer[i]) != pattern_word((done + i) / 4U) && bad++ < 4)
+                Dmod_Printf("sdtest: mismatch at %u\n", (unsigned)(done + i));
+    }
+    Dmod_FileClose(file);
+    unsigned read_ms = now_ms() - start;
+    Dmod_Printf("read back in %u ms: %u KiB/s, %u mismatches\n", read_ms, read_ms != 0 ? kib * 1000U / read_ms : 0U, bad);
+    return bad != 0;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2)
     {
-        Dmod_Printf("Usage: sdtest <host node> [MiB to read]   e.g. sdtest /dev/dmsdio0 4   (read-only)\n");
+        Dmod_Printf("Usage: sdtest <host node> [MiB to read]   e.g. sdtest /dev/dmsdio0 4   (read-only)\n"
+                    "       sdtest --fs <new file> [KiB]       e.g. sdtest --fs /mnt/CARD/test.bin 1024   (writes ONE NEW file, removes nothing)\n");
         return 1;
+    }
+    if (strcmp(argv[1], "--fs") == 0)
+    {
+        unsigned kib = 256;
+        if (argc < 3)
+            return 1;
+        if (argc > 3)
+        {
+            kib = 0;
+            for (const char *p = argv[3]; *p >= '0' && *p <= '9'; p++)
+                kib = kib * 10 + (unsigned)(*p - '0');
+        }
+        int r = fs_test(argv[2], kib);
+        Dmod_Printf("sdtest: %s\n", r == 0 ? "done" : "FAILED");
+        return r;
     }
     void *host = Dmod_FileOpen(argv[1], "r");
     if (host == NULL)

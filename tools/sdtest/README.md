@@ -11,3 +11,12 @@ sdtest /dev/dmsdio0 4            # and read 4 MiB from the start (and a few sect
 It asks the host node to look for a card (`DMDRVI_IOCTL_MONITOR_REFRESH`), prints what the card says (type, capacity, CID, CSD, the bus width and
 the clock the core negotiated), then opens `/dev/dmsdio<N>/0` for reading, prints the first sector (the MBR signature and the partitions, or
 the name of the file system of a volume without a partition table) and reads the requested number of MiB with a check of the speed.
+
+## Writes through a file system
+
+```
+sdtest --fs /mnt/CARD/dmsdio-test.bin 1024
+```
+
+With the card mounted (automount) it writes **one new file** with a known pattern, closes it, opens it again and compares it. It does not
+open an existing file for writing (it refuses when the file is there) and removes nothing; the file is left for you to look at and remove.
