@@ -58,7 +58,8 @@ the transfers (25 MHz at most: the SPI mode has no High Speed). The bus is 1 bit
 CMD8 carry theirs). The card has no detect line, so the periodic re-check (`poll_interval_ms`) finds it. `init_timeout_ms` bounds ACMD41; the clock is kept
 running between the polls (some cards go through the power-up only while they get one).
 
-Example: [configs/board/t-deck-pro/sdspi.ini](../configs/board/t-deck-pro/sdspi.ini).
+Examples: [configs/board/t-deck-pro/sdspi.ini](../configs/board/t-deck-pro/sdspi.ini) (the bus is shared with the display and the radio),
+[configs/board/elecrow-dis08070h/sdspi.ini](../configs/board/elecrow-dis08070h/sdspi.ini) (the bus, the chip select and the card are all in the ini).
 
 ## Card detect
 
