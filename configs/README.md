@@ -10,6 +10,8 @@ flashing.
 ```
 configs/
 └── board/
+    ├── elecrow-dis08070h/
+    │   └── sdspi.ini       # microSD in the SPI mode on a bus of its own (bus=spi): dmspi + chip select + dmsdio in one group
     ├── t-deck-pro/
     │   └── sdspi.ini       # microSD in the SPI mode on the bus of the e-paper (bus=spi)
     ├── stm32f407g-disc1/
