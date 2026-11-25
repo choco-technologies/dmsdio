@@ -12,6 +12,8 @@ a 64-bit block device through dmdrvi 2.0.
   ACMD41, CMD2, CMD3, CMD9, CMD7), OCR/CID/CSD/SCR/SD Status decoding,
   400 kHz identification, default speed and CMD6 High Speed, 1-bit/4-bit
   bus negotiation.
+- An SD card on an SPI bus too (`bus=spi`: the SPI mode of the card over a [dmspi](https://github.com/choco-technologies/dmspi) node shared with other
+  devices, the same identification and block I/O code - see docs/configuration.md).
 - SDSC byte addressing and SDHC/SDXC block addressing; full 64-bit
   capacity and offsets.
 - Single/multi-block read and write with CMD12, CMD13 ready polling, erase

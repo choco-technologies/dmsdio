@@ -14,22 +14,21 @@
 
 static int power_cycle(struct dmdrvi_context* ctx)
 {
-    dmsdio_instance_t instance = ctx->config.instance;
     uint32_t actual_hz = 0;
 
-    int ret = dmsdio_port_set_power(instance, false);
+    int ret = dmsdio_host_set_power(ctx, false);
     if (ret == 0)
     {
         dmosi_thread_sleep(1);
-        ret = dmsdio_port_set_power(instance, true);
+        ret = dmsdio_host_set_power(ctx, true);
     }
     if (ret == 0)
     {
-        ret = dmsdio_port_set_bus_width(instance, dmsdio_bus_width_1bit);
+        ret = dmsdio_host_set_bus_width(ctx, dmsdio_bus_width_1bit);
     }
     if (ret == 0)
     {
-        ret = dmsdio_port_set_clock(instance, SD_CLOCK_IDENTIFICATION_HZ, &actual_hz);
+        ret = dmsdio_host_set_clock(ctx, SD_CLOCK_IDENTIFICATION_HZ, &actual_hz);
     }
     if (ret == 0 && (actual_hz == 0 || actual_hz > SD_CLOCK_IDENTIFICATION_HZ))
     {
@@ -209,7 +208,7 @@ static int identify(struct dmdrvi_context* ctx, dmsdio_card_info_t* card)
 
 static int set_clock(struct dmdrvi_context* ctx, dmsdio_card_info_t* card, uint32_t hz)
 {
-    return dmsdio_port_set_clock(ctx->config.instance,
+    return dmsdio_host_set_clock(ctx,
                                  dmsdio_min_u32(hz, ctx->config.max_clock_hz), &card->clock_hz);
 }
 
@@ -271,7 +270,7 @@ static int negotiate_bus_width(struct dmdrvi_context* ctx, dmsdio_card_info_t* c
     }
     if (ret == 0)
     {
-        ret = dmsdio_port_set_bus_width(ctx->config.instance, dmsdio_bus_width_4bit);
+        ret = dmsdio_host_set_bus_width(ctx, dmsdio_bus_width_4bit);
     }
     if (ret == 0)
     {
@@ -370,10 +369,87 @@ static int configure_transfer_mode(struct dmdrvi_context* ctx, dmsdio_card_info_
     return ret;
 }
 
+/*
+ * The same card on an SPI bus: no CMD2/CMD3/CMD7 (the card is selected by its chip select, it has no address), no wider bus, no CMD6 (the
+ * clock is just raised). The CID and the CSD come as data blocks (CMD10, CMD9), which dmsdio_spi.c hands over like the long responses.
+ */
+static int identify_spi(struct dmdrvi_context* ctx, dmsdio_card_info_t* card)
+{
+    bool v2 = false;
+    dmsdio_response_t resp;
+    int ret = power_cycle(ctx);
+    for (int i = 0; ret == 0 && i < 3; i++)
+    {
+        ret = dmsdio_cmd_send(ctx, SD_CMD_GO_IDLE_STATE, 0, dmsdio_response_none, NULL);
+        if (ret != -ETIMEDOUT)
+        {
+            break;
+        }
+    }
+    if (ret == -ETIMEDOUT)
+    {
+        return -ENODEV;         /* nothing answers: an empty slot */
+    }
+    if (ret == 0)
+    {
+        ret = send_if_cond(ctx, &v2);
+    }
+    if (ret == 0)
+    {
+        ret = send_op_cond(ctx, v2, &card->ocr);
+    }
+    if (ret == 0)
+    {
+        ret = dmsdio_cmd_send(ctx, SD_CMD_SEND_CID, 0, dmsdio_response_long, &resp);
+    }
+    if (ret == 0)
+    {
+        memcpy(card->cid_raw, resp.words, sizeof(card->cid_raw));
+        dmsdio_decode_cid(card->cid_raw, &card->cid);
+        ret = read_csd(ctx, card);
+    }
+    if (ret == 0)
+    {
+        ret = classify(card, v2);
+    }
+    if (ret == 0 && !card->block_addressing)
+    {
+        ret = dmsdio_cmd_send(ctx, SD_CMD_SET_BLOCKLEN, DMSDIO_BLOCK_SIZE, dmsdio_response_short, &resp);
+    }
+    if (ret == 0)
+    {
+        ret = read_scr(ctx, card);
+    }
+    if (ret == 0)
+    {
+        card->bus_width = dmsdio_bus_width_1bit;
+        ret = read_ssr(ctx, card);
+    }
+    if (ret == 0)
+    {
+        ret = set_clock(ctx, card, SD_CLOCK_DEFAULT_SPEED_HZ);      /* the card's own limit; max_clock_hz of the board caps it */
+    }
+    return ret;
+}
+
 int dmsdio_ident_run(struct dmdrvi_context* ctx, dmsdio_card_info_t* card)
 {
     memset(card, 0, sizeof(*card));
     ctx->card.rca = 0;
+
+    if (ctx->config.spi_mode)
+    {
+        if (!dmsdio_spi_friends_there(ctx))
+        {
+            return -ENODEV;     /* the bus and the chip select are not there yet */
+        }
+        int result = identify_spi(ctx, card);
+        if (result != 0)
+        {
+            card->type = dmsdio_card_type_none;
+        }
+        return result;
+    }
 
     int ret = identify(ctx, card);
     if (ret == 0)

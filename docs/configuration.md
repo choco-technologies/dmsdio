@@ -19,6 +19,7 @@ poll_interval_ms=0
 | Key | Default | Description |
 |-----|---------|-------------|
 | `instance` | `1` | Host controller instance (1 = SDMMC1/SDIO) |
+| `bus` | `sdio` | `sdio`: the card is on a host controller (SDIO/SDMMC/SDHOST) served by `dmsdio_port`. `spi`: the card is on an SPI bus, see [SPI mode](#spi-mode) |
 | `major` | `instance - 1` | Device number: `/dev/dmsdio<major>` and `/dev/dmsdio<major>/0` |
 | `bus_width` | `4` | Widest bus wired on the board (`1` or `4`). 4-bit is used only when the card's SCR supports it |
 | `max_clock_hz` | `50000000` | Upper clock limit. High Speed (50 MHz class) is only attempted above 25 MHz |
@@ -39,6 +40,25 @@ poll_interval_ms=0
 The last three keys are the dmdrvi monitor policy, under the names dmdrvi
 prescribes for every driver: dmsdio does not act on them itself, it hands
 them out through `DMDRVI_IOCTL_MONITOR_GET_POLICY` (see below).
+
+## SPI mode
+
+`bus=spi` carries the same commands over the SPI mode of the card (slots wired to the SPI lines, like the one of the LILYGO T-Deck Pro). Everything
+above the transport is the same code: identification, retries, the block I/O, the device nodes. `dmsdio_port` is not used (its host controller is
+not touched), the bus is a [dmspi](https://github.com/choco-technologies/dmspi) node of the `friends_group`:
+
+| `friend_role` | Device |
+|---------------|--------|
+| `spi` | the dmspi node of the bus (it may be shared with other devices: the display, a radio) |
+| `sd_cs` | the dmgpio output that is the chip select of the card (it must be deselected - high - from the start) |
+
+Every command is one dmspi *session* (`dmspi_ioctl_cmd_session_*`): the bus is held and the card selected from the first byte of the command to the end
+of its data phase, at the clock of the card, and the bus goes back to the clock it had. Identification runs at 400 kHz; `max_clock_hz` is the clock of
+the transfers (25 MHz at most: the SPI mode has no High Speed). The bus is 1 bit (`bus_width` is ignored); the CRC of the SPI mode is off (CMD0 and
+CMD8 carry theirs). The card has no detect line, so the periodic re-check (`poll_interval_ms`) finds it. `init_timeout_ms` bounds ACMD41; the clock is kept
+running between the polls (some cards go through the power-up only while they get one).
+
+Example: [configs/board/t-deck-pro/sdspi.ini](../configs/board/t-deck-pro/sdspi.ini).
 
 ## Card detect
 

@@ -10,6 +10,8 @@ flashing.
 ```
 configs/
 └── board/
+    ├── t-deck-pro/
+    │   └── sdspi.ini       # microSD in the SPI mode on the bus of the e-paper (bus=spi)
     ├── stm32f407g-disc1/
     │   └── sdio.ini        # external microSD breakout on SDIO
     └── stm32f746g-disco/

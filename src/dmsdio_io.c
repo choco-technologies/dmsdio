@@ -65,7 +65,7 @@ static io_step_t plan_step(const struct dmdrvi_context* ctx, const void* buf, ui
     }
     step.blocks = min_blocks(remaining / BLOCK, ctx->config.max_blocks_per_transfer);
     step.kind   = step_direct;
-    if (!dmsdio_port_buffer_is_direct(ctx->config.instance, buf, step.blocks * BLOCK, direction))
+    if (!dmsdio_host_buffer_is_direct(ctx, buf, step.blocks * BLOCK, direction))
     {
         step.kind   = step_bounced;
         step.blocks = min_blocks(step.blocks, ctx->config.bounce_blocks);

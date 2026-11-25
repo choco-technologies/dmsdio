@@ -15,6 +15,7 @@
 #define SD_CMD_SELECT_CARD          7
 #define SD_CMD_SEND_IF_COND         8
 #define SD_CMD_SEND_CSD             9
+#define SD_CMD_SEND_CID             10
 #define SD_CMD_STOP_TRANSMISSION    12
 #define SD_CMD_SEND_STATUS          13
 #define SD_CMD_SET_BLOCKLEN         16

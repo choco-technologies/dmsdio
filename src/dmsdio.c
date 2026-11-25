@@ -60,7 +60,7 @@ static int check_card_handle(struct dmdrvi_context* ctx, const dmsdio_handle_t* 
 static uint8_t* allocate_bounce(struct dmdrvi_context* ctx)
 {
     size_t size = (size_t)ctx->config.bounce_blocks * DMSDIO_BLOCK_SIZE;
-    ctx->bounce = dmsdio_port_buffer_alloc(ctx->config.instance, size);
+    ctx->bounce = dmsdio_host_buffer_alloc(ctx, size);
     ctx->bounce_from_port = (ctx->bounce != NULL);
     if (ctx->bounce == NULL)
     {
@@ -75,7 +75,7 @@ static void free_bounce(struct dmdrvi_context* ctx)
 {
     if (ctx->bounce_from_port)
     {
-        dmsdio_port_buffer_free(ctx->config.instance, ctx->bounce);
+        dmsdio_host_buffer_free(ctx, ctx->bounce);
     }
     else
     {
@@ -89,9 +89,13 @@ static void destroy_context(struct dmdrvi_context* ctx, bool port_ready)
     dmsdio_detect_release(ctx);
     if (port_ready)
     {
-        dmsdio_port_set_power(ctx->config.instance, false);
-        dmsdio_port_host_deinit(ctx->config.instance);
+        dmsdio_host_set_power(ctx, false);
+        if (!ctx->config.spi_mode)
+        {
+            dmsdio_port_host_deinit(ctx->config.instance);
+        }
     }
+    dmsdio_spi_release(ctx);
     if (ctx->lock != NULL)
     {
         dmosi_mutex_destroy(ctx->lock);
@@ -153,7 +157,8 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_context_t, _create,
         destroy_context(ctx, false);
         return NULL;
     }
-    int ret = dmsdio_port_host_init(ctx->config.instance);
+    /* On an SPI bus there is no host controller of ours: the bus is the dmspi of the friends_group */
+    int ret = ctx->config.spi_mode ? 0 : dmsdio_port_host_init(ctx->config.instance);
     if (ret != 0)
     {
         DMOD_LOG_ERROR("dmsdio: host %u initialization failed (%d)\n", (unsigned)ctx->config.instance, ret);
@@ -161,7 +166,7 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, dmdrvi_context_t, _create,
         return NULL;
     }
     const dmsdio_config_t* c = &ctx->config;
-    if (c->clk_pin >= 0 || c->cmd_pin >= 0 || c->d0_pin >= 0 || c->d1_pin >= 0 || c->d2_pin >= 0 || c->d3_pin >= 0)
+    if (!c->spi_mode && (c->clk_pin >= 0 || c->cmd_pin >= 0 || c->d0_pin >= 0 || c->d1_pin >= 0 || c->d2_pin >= 0 || c->d3_pin >= 0))
     {
         ret = dmsdio_port_set_pins(c->instance, c->clk_pin, c->cmd_pin, c->d0_pin, c->d1_pin, c->d2_pin, c->d3_pin);
         if (ret != 0)
@@ -192,8 +197,18 @@ dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _free, ( dmdrvi_context_t con
 dmod_dmdrvi_dif_api_declaration(2.0, dmsdio, void, _friend_changed,
     ( dmdrvi_context_t context, const dmdrvi_friend_info_t* info ))
 {
-    if (!is_valid_context(context) || info == NULL || info->friend_role == NULL ||
-        strcmp(info->friend_role, "card_detect") != 0)
+    if (!is_valid_context(context) || info == NULL || info->friend_role == NULL)
+    {
+        return;
+    }
+    if (context->config.spi_mode && (strcmp(info->friend_role, "spi") == 0 || strcmp(info->friend_role, "sd_cs") == 0))
+    {
+        dmsdio_lock(context);
+        dmsdio_spi_friend(context, info->friend_role, info->state == dmdrvi_dev_state_ready ? info->node_path : NULL);
+        dmsdio_unlock(context);
+        return;
+    }
+    if (strcmp(info->friend_role, "card_detect") != 0)
     {
         return;
     }
