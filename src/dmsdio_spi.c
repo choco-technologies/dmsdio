@@ -232,6 +232,8 @@ static dmsdio_status_t transport_status(int error)
  * kept in `carry` and looked at first.
  */
 #define SCRATCH_SIZE            (DMSDIO_BLOCK_SIZE + 16u)
+#define PIECE_SIZE              60u         /* A block is sent in pieces below 64 bytes (see write_blocks) */
+#define RESPONSE_TRIES          8u          /* bytes the data response token of a write may come after the CRC */
 #define CARRY_MAX               8u
 
 typedef struct
@@ -335,22 +337,38 @@ static dmsdio_status_t write_blocks(struct dmdrvi_context* ctx, uint8_t index, c
         return dmsdio_status_invalid;
     }
     uint8_t* tx = ctx->spi_scratch;
-    uint8_t* rx = ctx->spi_scratch + SCRATCH_SIZE;
     for (uint32_t block = 0; block < data->block_count; block++)
     {
-        /* a gap byte, the token, the data, the CRC (not checked by the card), then the clocks in which the card answers (xxx0 0101) */
-        size_t response_at = 1u + 1u + data->block_size + 2u;
-        size_t length = (response_at + 1u + 3u) & ~3u;
+        /*
+         * A gap byte, the token, the data, the CRC (not checked by the card), sent in pieces below 64 bytes and only sent: what comes in
+         * meanwhile is not read. Then the data response token (xxx0 0101: accepted), read by itself: the card answers within the next bytes.
+         * Measured on the Elecrow DIS08070H (ESP32-S3, dmspi): sent as one transfer (dmspi takes 64 bytes or more by DMA), the card never
+         * answered with an accepted token at the place of the answer (0x00, every write reported as failed although its data was written);
+         * in pieces every write is accepted. Pieces of 60 bytes are 9 transfers a block.
+         */
+        size_t length = 1u + 1u + data->block_size + 2u;
         memset(tx, 0xFF, length);
         tx[1] = index == SD_CMD_WRITE_MULTIPLE_BLOCK ? TOKEN_MULTI_WRITE : TOKEN_BLOCK_START;
         memcpy(tx + 2, buffer + (size_t)block * data->block_size, data->block_size);
-        if (xfer(ctx, tx, rx, length) != 0)
+        for (size_t sent = 0; sent < length; sent += PIECE_SIZE)
         {
-            return dmsdio_status_overrun;
+            size_t piece = length - sent < PIECE_SIZE ? length - sent : PIECE_SIZE;
+            if (xfer(ctx, tx + sent, NULL, piece) != 0)
+            {
+                return dmsdio_status_overrun;
+            }
         }
-        uint8_t response = rx[response_at];
+        uint8_t response = 0xFF;
+        for (unsigned tries = 0; response == 0xFF && tries < RESPONSE_TRIES; tries++)
+        {
+            if (xfer(ctx, NULL, &response, 1) != 0)
+            {
+                return dmsdio_status_overrun;
+            }
+        }
         if ((response & 0x1Fu) != 0x05u)                    /* xxx0 0101: accepted */
         {
+            DMOD_LOG_WARN("dmsdio: write: the card answered 0x%02x\n", response);
             return (response & 0x1Fu) == 0x0Bu ? dmsdio_status_data_crc : dmsdio_status_overrun;
         }
         int ret = wait_ready(ctx, data->timeout_ms);
